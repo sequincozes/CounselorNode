@@ -1,0 +1,36 @@
+{
+  "node_a": {
+    "ip": "127.0.0.1",
+    "port": 5000,
+    "source_type": "conexao_tcp",
+    "description": "Node A, specialized in TCP traffic."
+  },
+  "node_b": {
+    "ip": "127.0.0.1",
+    "port": 5001,
+    "source_type": "log_aplicacao",
+    "description": "Node B, specialized in application logs."
+  },
+  "counselor_peers": [
+    {
+      "name": "node_b",
+      "ip": "127.0.0.1",
+      "port": 5001,
+      "source_type": "log_aplicacao"
+    }
+  ],
+  "ml_config": {
+    "training_dataset_source": "auto",
+    "n_samples": 1000,
+    "n_features": 10,
+    "n_classes": 3,
+    "clustering_n_clusters": 5,
+    "classifiers": [
+      "DecisionTreeClassifier",
+      "KNeighborsClassifier",
+      "GaussianNB",
+      "SVC"
+    ],
+    "f1_threshold": 0.05
+  }
+}
