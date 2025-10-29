@@ -21,8 +21,8 @@
   ],
   "ml_config": {
     "training_dataset_source": "auto",
-    "n_samples": 1000,
-    "n_features": 10,
+    "n_samples": 569,
+    "n_features": 31,
     "n_classes": 3,
     "clustering_n_clusters": 5,
     "classifiers": [

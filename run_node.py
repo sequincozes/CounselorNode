@@ -36,15 +36,13 @@ def main():
             print("SIMULATION: NODE A (DCS) CHECKING TRAFFIC")
             print("=" * 50)
 
-            # Sample 1: Should be classified or generate conflict
-            suspect_sample_data = generate_test_sample(node.engine)
-            node.check_traffic_and_act(suspect_sample_data)
+            while True:
+                # Sample 1: Should be classified or generate conflict
+                suspect_sample_data = generate_test_sample(node.engine)
+                node.check_traffic_and_act(suspect_sample_data)
 
-            time.sleep(4)  # Waits for P2P response
+                time.sleep(0.1)  # Waits for P2P response
 
-            # Sample 2: Another sample
-            another_sample_data = generate_test_sample(node.engine)
-            node.check_traffic_and_act(another_sample_data)
 
         # Main loop to keep the server running
         while True:
