@@ -7,18 +7,18 @@ BUFFER_SIZE = 1024
 
 
 class CounselorServer:
-    """Implements the server that listens for P2P counseling requests."""
+    """Implementa o servidor que escuta por pedidos de aconselhamento P2P."""
 
-    def __init__(self, host, port, node_id, local_source_type, counseling_fn):
+    def __init__(self, host, port, node_id, counseling_fn):
         self.host = host
         self.port = port
         self.node_id = node_id
-        self.local_source_type = local_source_type
-        self.counseling_logic_fn = counseling_fn  # Callback function for ML logic
+        # self.local_source_type foi REMOVIDO
+        self.counseling_logic_fn = counseling_fn  # Função de callback para lógica ML
         self.is_running = False
 
     def _handle_request(self, conn, addr):
-        """Processes a received counseling request."""
+        """Processa um pedido de aconselhamento recebido."""
         try:
             data = conn.recv(BUFFER_SIZE).decode('utf-8')
             if not data: return
@@ -27,50 +27,50 @@ class CounselorServer:
             requester_id = request.get('requester_id', 'Unknown')
             amostra_str = request.get('amostra', 'N/A')
 
-            # --- REAL CLASSIFICATION LOGIC ON THE SERVER ---
+            # --- LÓGICA DE CLASSIFICAÇÃO REAL NO SERVIDOR ---
             try:
-                # Converts the JSON feature string back to a NumPy array
+                # Converte a string de feature JSON de volta para um array NumPy
                 amostra_array = np.array(json.loads(amostra_str), dtype=float)
 
-                # Executes the real classification logic (high confidence)
+                # Executa a lógica de classificação real (alta confiança)
                 final_prediction_str = self.counseling_logic_fn(amostra_array)
 
-                # Formats the response
-                if final_prediction_str == '0':  # Example: assuming class '0' is NORMAL
+                # Formata a resposta
+                if final_prediction_str == '0':  # Exemplo: assumindo que a classe '0' é NORMAL
                     decision = "NORMAL"
-                    counsel_msg = "Analysis concluded. Result: Normal traffic (High Confidence - DCS)."
+                    counsel_msg = "Análise concluída. Resultado: Tráfego normal (Alta Confiança - DCS)."
                 elif final_prediction_str == 'UNKNOWN':
                     decision = "UNKNOWN"
-                    counsel_msg = "Analysis failed: Cluster not mapped on Counselor Node."
-                else:  # Any other class is INTRUSION
+                    counsel_msg = "Análise falhou: Cluster não mapeado no Nó Conselheiro."
+                else:  # Qualquer outra classe é INTRUSAO
                     decision = "INTRUSION"
-                    counsel_msg = f"Intrusion Confirmed: Class {final_prediction_str} (High Confidence via DCS)."
+                    counsel_msg = f"Intrusão Confirmada: Classe {final_prediction_str} (Alta Confiança via DCS)."
 
             except Exception as e:
-                print(f"SERVER ERROR: Classification failed: {e}")
+                print(f"ERRO DE SERVIDOR: Classificação falhou: {e}")
                 decision = "ERROR"
-                counsel_msg = "Classification engine failed on this sample."
+                counsel_msg = "Motor de classificação falhou nesta amostra."
             # ------------------------------------------------
 
-            print(f"\n[SERVER] Received counseling request from {requester_id} ({addr[0]}:{addr[1]})")
+            print(f"\n[SERVIDOR] Pedido de aconselhamento recebido de {requester_id} ({addr[0]}:{addr[1]})")
 
             response = {
                 "counselor_id": self.node_id,
                 "decision": decision,
-                "counsel": counsel_msg,
-                "source_type": self.local_source_type
+                "counsel": counsel_msg
+                # "source_type" foi REMOVIDO
             }
 
             conn.sendall(json.dumps(response).encode('utf-8'))
-            print(f"[SERVER] Counsel sent: '{response['decision']}'.")
+            print(f"[SERVIDOR] Conselho enviado: '{response['decision']}'.")
 
         except Exception as e:
-            print(f"[SERVER] Error processing request: {e}")
+            print(f"[SERVIDOR] Erro processando pedido: {e}")
         finally:
             conn.close()
 
     def start_listening(self):
-        """Starts the server in a separate thread to listen for P2P requests."""
+        """Inicia o servidor em uma thread separada para escutar por pedidos P2P."""
         try:
             server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -78,7 +78,7 @@ class CounselorServer:
             server_socket.listen(5)
             self.is_running = True
 
-            print(f"[SERVER] Listening for connections on {self.host}:{self.port}...")
+            print(f"[SERVIDOR] Escutando por conexões em {self.host}:{self.port}...")
 
             def server_loop():
                 while self.is_running:
@@ -92,7 +92,7 @@ class CounselorServer:
                         continue
                     except Exception as e:
                         if self.is_running:
-                            print(f"[SERVER] Error in main loop: {e}")
+                            print(f"[SERVIDOR] Erro no loop principal: {e}")
                         break
 
             server_thread = threading.Thread(target=server_loop)
@@ -100,42 +100,43 @@ class CounselorServer:
             server_thread.start()
 
         except Exception as e:
-            print(f"[SERVER] Error starting server: {e}")
+            print(f"[SERVIDOR] Erro iniciando servidor: {e}")
             raise
 
 
 class CounselorClient:
-    """Implements the client functionality to request counsel from other peers."""
+    """Implementa a funcionalidade de cliente para pedir conselho a outros pares."""
 
     def __init__(self, node_id, peer_manager):
         self.node_id = node_id
         self.peer_manager = peer_manager
 
-    def request_counsel(self, sample_data_array, required_source_type):
+    def request_counsel(self, sample_data_array, other_peers_list):
         """
-        Selects a peer and sends a counseling request.
-        Accepts sample_data as a NumPy array.
+        Seleciona um par aleatório da lista fornecida e envia um pedido de aconselhamento.
+        Aceita sample_data como um array NumPy.
         """
-        print("\n--- REQUESTING P2P COUNSEL ---")
+        print("\n--- PEDINDO ACONSELHAMENTO P2P ---")
 
-        target_peer = self.peer_manager.find_counselor(required_source_type)
-
-        if not target_peer:
-            print(f"[CLIENT] Counselor with specialty '{required_source_type}' not found.")
+        if not other_peers_list:
+            print("[CLIENTE] Nenhum outro par disponível para pedir conselho.")
             return None
+
+        # Seleciona um conselheiro aleatório da lista de outros pares
+        target_peer = other_peers_list[np.random.randint(0, len(other_peers_list))]
 
         peer_ip = target_peer['ip']
         peer_port = target_peer['port']
 
-        print(f"[CLIENT] Selected Counselor: {target_peer['name']} ({peer_ip}:{peer_port})")
+        print(f"[CLIENTE] Conselheiro Selecionado: {target_peer['name']} ({peer_ip}:{peer_port})")
 
-        # Converts the NumPy array (sample_data_array) to a serializable JSON string
+        # Converte o array NumPy (sample_data_array) para uma string JSON serializável
         sample_data_str = json.dumps(sample_data_array.tolist())
 
         request_data = {
             "requester_id": self.node_id,
-            "reason": "Local classifier conflict",
-            "amostra": sample_data_str  # Sent as a JSON array string
+            "reason": "Conflito de classificador local",
+            "amostra": sample_data_str  # Enviado como uma string de array JSON
         }
         request_message = json.dumps(request_data).encode('utf-8')
 
@@ -148,17 +149,17 @@ class CounselorClient:
             response_data = client_socket.recv(BUFFER_SIZE).decode('utf-8')
             response = json.loads(response_data)
 
-            print("--- COUNSEL RECEIVED ---")
-            print(f"Counselor Decision ({response['counselor_id']}): {response['decision']}")
+            print("--- CONSELHO RECEBIDO ---")
+            print(f"Decisão do Conselheiro ({response['counselor_id']}): {response['decision']}")
             print("--------------------------")
             return response
 
         except socket.timeout:
-            print(f"[CLIENT] Error: Timeout attempting to communicate with {peer_ip}:{peer_port}")
+            print(f"[CLIENTE] Erro: Timeout tentando comunicar com {peer_ip}:{peer_port}")
         except ConnectionRefusedError:
-            print(f"[CLIENT] Error: Connection refused. Counselor is not active.")
+            print(f"[CLIENTE] Erro: Conexão recusada. Conselheiro não está ativo.")
         except Exception as e:
-            print(f"[CLIENT] Error in P2P communication: {e}")
+            print(f"[CLIENTE] Erro na comunicação P2P: {e}")
         finally:
             if 'client_socket' in locals():
                 client_socket.close()

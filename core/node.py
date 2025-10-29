@@ -3,61 +3,60 @@ import time
 import numpy as np
 import json
 
-# Importing layers
+# Importando camadas
 from infrastructure.config_manager import ConfigManager
 from infrastructure.networking import CounselorServer, CounselorClient
 from core.classifier_engine import ClassifierEngine
 
 
 class CounselorNode:
-    """The main class representing the IDS (Detector) in the Counselors Network."""
+    """A classe principal que representa o IDS (Detector) na Counselors Network."""
 
-    def __init__(self, node_id):
-        self.node_id = node_id
+    def __init__(self, port):
+        self.port = port
+        self.host = '127.0.0.1'
 
-        # Component 1: Configuration and Peers
-        self.peer_manager = ConfigManager(node_id)
+        # Componente 1: Configuração e Pares (Inicializado com a porta local)
+        self.peer_manager = ConfigManager(self.port)
         local_info = self.peer_manager.get_local_info()
-        self.host = local_info['ip']
-        self.port = local_info['port']
-        self.source_type = local_info['source_type']
 
-        # Component 2: ML Engine (IDS Intelligence)
-        self.engine = ClassifierEngine(self.peer_manager.get_ml_config())  # Initializes DCS training
+        # O 'node_id' agora é o 'name' do arquivo de configuração
+        self.node_id = local_info.get('name')
 
-        # Component 3 & 4: Network (The server receives the real classification function)
-        self.client = CounselorClient(node_id, self.peer_manager)
+        # Componente 2: Motor ML (Inteligência IDS)
+        self.engine = ClassifierEngine(self.peer_manager.get_ml_config())  # Inicializa o treinamento DCS
+
+        # Componente 3 & 4: Rede (O servidor recebe a função de classificação real)
+        self.client = CounselorClient(self.node_id, self.peer_manager)
         self.server = CounselorServer(
             self.host,
             self.port,
             self.node_id,
-            self.source_type,
-            self._execute_counseling_logic  # Passes the node's real logic as callback
+            self._execute_counseling_logic  # Passa a lógica real do nó como callback
         )
 
-        print(f"--- {self.node_id.upper()} STARTED ---")
-        print(f"Address: {self.host}:{self.port}")
-        print(f"Specialty: {self.source_type}")
+        print(f"--- {self.node_id.upper()} INICIADO ---")
+        print(f"Endereço: {self.host}:{self.port}")
         print("-" * 30)
 
     def start(self):
-        """Starts the server and keeps the node active."""
+        """Inicia o servidor e mantém o nó ativo."""
         self.server.start_listening()
 
     def _execute_counseling_logic(self, sample_data_array):
         """
-        Callback function executed when this node receives a counseling request.
+        Função de callback executada quando este nó recebe um pedido de aconselhamento.
         """
         return self.engine.counseling_logic(sample_data_array)
 
     def check_traffic_and_act(self, sample_data_array):
         """
-        Processes a sample using the local DCS and checks for conflict.
+        Processa uma amostra usando o DCS local e verifica por conflito.
         """
-        # Displays the first 5 features of the sample
-        print(f"\n[{self.node_id.upper()}] Analyzing sample (first 5 features): {sample_data_array[:5]}...")
+        # Exibe as primeiras 5 features da amostra
+        print(f"\n[{self.node_id.upper()}] Analisando amostra (primeiras 5 features): {sample_data_array[:5]}...")
 
-        # 1. Classifies and checks for conflict using the DCS engine
+        # 1. Classifica e verifica por conflito usando o motor DCS
         results = self.engine.classify_and_check_conflict(sample_data_array)
 
         classification = results['classification']
@@ -65,25 +64,32 @@ class CounselorNode:
         decisions = results['decisions']
         cluster_id = results.get('cluster_id', 'N/A')
 
-        print(f"[{self.node_id.upper()}] Local DCS Result (Cluster {cluster_id}): {classification}")
-        print(f"[{self.node_id.upper()}] Local Decisions (Classes): {decisions}")
+        print(f"[{self.node_id.upper()}] Resultado DCS Local (Cluster {cluster_id}): {classification}")
+        print(f"[{self.node_id.upper()}] Decisões Locais (Classes): {decisions}")
 
-        # 2. Counseling Network Trigger Logic
+        # 2. Lógica de Gatilho da Rede de Conselheiros
         if conflict:
-            print(f"[{self.node_id.upper()}] Alert: CLASSIFIER CONFLICT DETECTED! Reaching out to Counselors Network.")
+            print(
+                f"[{self.node_id.upper()}] Alerta: CONFLITO DE CLASSIFICADOR DETECTADO! Consultando a Counselors Network.")
 
-            # Chooses the specialist: Here, hardcoded for 'log_aplicacao' (Node B)
-            required_type = 'log_aplicacao'
+            # Busca outros pares para consultar
+            other_peers = self.peer_manager.get_other_peers()
 
-            counsel_response = self.client.request_counsel(sample_data_array, required_type)
+            if not other_peers:
+                print(
+                    f"[{self.node_id.upper()}] Ação: Conflito detectado, mas não há outros pares para consultar. Usando decisão local padrão.")
+                return
+
+            # O cliente agora selecionará um par aleatório da lista
+            counsel_response = self.client.request_counsel(sample_data_array, other_peers)
 
             if counsel_response and counsel_response['decision'] == 'INTRUSION':
                 print(
-                    f"[{self.node_id.upper()}] Action: Final Decision: INTRUSION (Confirmed by {counsel_response['counselor_id']}).")
-                # EXTENSION POINT: Implement Incremental Learning
+                    f"[{self.node_id.upper()}] Ação: Decisão Final: INTRUSION (Confirmado por {counsel_response['counselor_id']}).")
+                # PONTO DE EXTENSÃO: Implementar Aprendizado Incremental
             else:
                 print(
-                    f"[{self.node_id.upper()}] Action: Conflict resolved or no definitive external counsel. Using default local decision.")
+                    f"[{self.node_id.upper()}] Ação: Conflito resolvido ou sem conselho externo definitivo. Usando decisão local padrão.")
         else:
             print(
-                f"[{self.node_id.upper()}] Local Classification: No conflict detected. Final Decision: {classification}.")
+                f"[{self.node_id.upper()}] Classificação Local: Sem conflito detectado. Decisão Final: {classification}.")

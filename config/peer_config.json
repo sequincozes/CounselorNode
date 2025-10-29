@@ -1,22 +1,22 @@
 {
-  "node_a": {
-    "ip": "127.0.0.1",
-    "port": 5000,
-    "source_type": "conexao_tcp",
-    "description": "Node A, specialized in TCP traffic."
-  },
-  "node_b": {
-    "ip": "127.0.0.1",
-    "port": 5001,
-    "source_type": "log_aplicacao",
-    "description": "Node B, specialized in application logs."
+  "network_config": {
+    "description": "Configuração geral da rede de conselheiros."
   },
   "counselor_peers": [
     {
-      "name": "node_b",
+      "name": "conselheiro_1",
       "ip": "127.0.0.1",
-      "port": 5001,
-      "source_type": "log_aplicacao"
+      "port": 5000
+    },
+    {
+      "name": "conselheiro_2",
+      "ip": "127.0.0.1",
+      "port": 5001
+    },
+    {
+      "name": "conselheiro_3",
+      "ip": "127.0.0.1",
+      "port": 5002
     }
   ],
   "ml_config": {
