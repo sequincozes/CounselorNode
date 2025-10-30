@@ -13,15 +13,17 @@ class CounselorNode:
     """A classe principal que representa o IDS (Detector) na Counselors Network."""
 
     def __init__(self, port):
-        self.port = port
-        self.host = '127.0.0.1'
-
-        # Componente 1: Configuração e Pares (Inicializado com a porta local)
-        self.peer_manager = ConfigManager(self.port)
+        # Componente 1: Configuração (Inicializado com a porta local)
+        self.peer_manager = ConfigManager(port)
         local_info = self.peer_manager.get_local_info()
 
-        # O 'node_id' agora é o 'name' do arquivo de configuração
+        # Informações lidas do config
+        self.port = local_info.get('port')
         self.node_id = local_info.get('name')
+        self.config_ip = local_info.get('ip')  # O IP que outros pares usam para ME encontrar
+
+        # O host de "bind" é 0.0.0.0 para escutar em todas as interfaces
+        self.bind_host = '0.0.0.0'
 
         # Componente 2: Motor ML (Inteligência IDS)
         self.engine = ClassifierEngine(self.peer_manager.get_ml_config())  # Inicializa o treinamento DCS
@@ -29,14 +31,15 @@ class CounselorNode:
         # Componente 3 & 4: Rede (O servidor recebe a função de classificação real)
         self.client = CounselorClient(self.node_id, self.peer_manager)
         self.server = CounselorServer(
-            self.host,
+            self.bind_host,  # Escuta em 0.0.0.0
             self.port,
             self.node_id,
             self._execute_counseling_logic  # Passa a lógica real do nó como callback
         )
 
         print(f"--- {self.node_id.upper()} INICIADO ---")
-        print(f"Endereço: {self.host}:{self.port}")
+        print(f"IP de Configuração (para outros pares): {self.config_ip}:{self.port}")
+        print(f"Endereço de Bind (Escutando em):   {self.bind_host}:{self.port}")
         print("-" * 30)
 
     def start(self):

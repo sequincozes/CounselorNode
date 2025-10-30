@@ -6,14 +6,34 @@ import numpy as np
 BUFFER_SIZE = 1024
 
 
+def _get_local_ip():
+    """
+    Tenta encontrar o IP local "principal" da máquina na rede.
+    Usa um truque comum de criar um socket e conectar-se a um IP externo.
+    """
+    s = None
+    try:
+        # Conecta a um IP externo (não envia dados)
+        # 8.8.8.8 é o DNS do Google
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = '127.0.0.1'  # Fallback para localhost
+    finally:
+        if s:
+            s.close()
+    return ip
+
+
 class CounselorServer:
     """Implementa o servidor que escuta por pedidos de aconselhamento P2P."""
 
     def __init__(self, host, port, node_id, counseling_fn):
-        self.host = host
+        self.host = host  # Será '0.0.0.0'
         self.port = port
         self.node_id = node_id
-        # self.local_source_type foi REMOVIDO
         self.counseling_logic_fn = counseling_fn  # Função de callback para lógica ML
         self.is_running = False
 
@@ -58,7 +78,6 @@ class CounselorServer:
                 "counselor_id": self.node_id,
                 "decision": decision,
                 "counsel": counsel_msg
-                # "source_type" foi REMOVIDO
             }
 
             conn.sendall(json.dumps(response).encode('utf-8'))
@@ -78,7 +97,15 @@ class CounselorServer:
             server_socket.listen(5)
             self.is_running = True
 
-            print(f"[SERVIDOR] Escutando por conexões em {self.host}:{self.port}...")
+            # --- Mensagem de Log Aprimorada ---
+            # Mostra o IP detectado para facilitar a conexão de outros
+            display_host = self.host
+            if display_host == '0.0.0.0':
+                detected_ip = _get_local_ip()
+                display_host = f"todas as interfaces (IP detectado: {detected_ip})"
+
+            print(f"[SERVIDOR] Escutando por conexões em {display_host} na porta {self.port}...")
+            # ----------------------------------
 
             def server_loop():
                 while self.is_running:
@@ -125,6 +152,7 @@ class CounselorClient:
         # Seleciona um conselheiro aleatório da lista de outros pares
         target_peer = other_peers_list[np.random.randint(0, len(other_peers_list))]
 
+        # Usa o IP e a Porta definidos no peer_config.json
         peer_ip = target_peer['ip']
         peer_port = target_peer['port']
 

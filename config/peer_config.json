@@ -5,18 +5,13 @@
   "counselor_peers": [
     {
       "name": "conselheiro_1",
-      "ip": "127.0.0.1",
-      "port": 5000
-    },
-    {
-      "name": "conselheiro_2",
-      "ip": "127.0.0.1",
+      "ip": "192.168.137.141",
       "port": 5001
     },
     {
-      "name": "conselheiro_3",
-      "ip": "127.0.0.1",
-      "port": 5002
+      "name": "conselheiro_2",
+      "ip": "192.168.137.141",
+      "port": 5000
     }
   ],
   "ml_config": {

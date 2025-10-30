@@ -13,17 +13,21 @@ class ConfigManager:
 
     def __init__(self, local_port):
         self.config = self._load_config()
-        self.local_ip = '127.0.0.1'  # IP local padronizado
         self.local_port = local_port
 
         self.peers = self.config.get('counselor_peers', [])
         self.ml_config = self.config.get('ml_config', {})
 
-        # Encontra as informações do nó local na lista de pares
-        self.local_info = self._find_local_info(self.local_ip, self.local_port)
-        if not self.local_info:
-            raise ValueError(f"Nó com 127.0.0.1:{local_port} não encontrado em 'counselor_peers' no peer_config.json")
+        # Encontra as informações do nó local na lista de pares USANDO A PORTA
+        self.local_info = self._find_local_info_by_port(self.local_port)
 
+        if not self.local_info:
+            raise ValueError(
+                f"Nó com porta {local_port} não encontrado em 'counselor_peers' no peer_config.json"
+            )
+
+        # O IP local e o nome agora são lidos DIRETAMENTE do arquivo de configuração
+        self.local_ip = self.local_info.get('ip')
         self.node_id = self.local_info.get('name', f'node_{local_port}')
 
     def _load_config(self):
@@ -38,9 +42,9 @@ class ConfigManager:
             print(f"ERRO: Arquivo de configuração inválido.")
             sys.exit(1)
 
-    def _find_local_info(self, ip, port):
-        """Encontra a entrada do nó local na lista de pares."""
-        return next((p for p in self.peers if p['ip'] == ip and p['port'] == port), None)
+    def _find_local_info_by_port(self, port):
+        """Encontra a entrada do nó local na lista de pares pela porta."""
+        return next((p for p in self.peers if p['port'] == port), None)
 
     def get_local_info(self):
         """Retorna as informações do nó local (IP/Porta/Nome)."""
@@ -52,4 +56,5 @@ class ConfigManager:
 
     def get_other_peers(self):
         """Encontra todos os pares que NÃO são este nó local."""
-        return [p for p in self.peers if p['port'] != self.local_port or p['ip'] != self.local_ip]
+        # Compara pela porta, que deve ser única
+        return [p for p in self.peers if p['port'] != self.local_port]
