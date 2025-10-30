@@ -8,27 +8,27 @@ CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'co
 class ConfigManager:
     """
     Gerencia o carregamento da lista de pares P2P e configurações de ML.
-    Identifica o nó local com base na porta fornecida.
+    Identifica o nó local com base no IP detectado.
     """
 
-    def __init__(self, local_port):
+    def __init__(self, local_ip):
         self.config = self._load_config()
-        self.local_port = local_port
+        self.local_ip = local_ip
 
         self.peers = self.config.get('counselor_peers', [])
         self.ml_config = self.config.get('ml_config', {})
 
-        # Encontra as informações do nó local na lista de pares USANDO A PORTA
-        self.local_info = self._find_local_info_by_port(self.local_port)
+        # Encontra as informações do nó local na lista de pares USANDO O IP
+        self.local_info = self._find_local_info_by_ip(self.local_ip)
 
         if not self.local_info:
             raise ValueError(
-                f"Nó com porta {local_port} não encontrado em 'counselor_peers' no peer_config.json"
+                f"Nó com IP {local_ip} não encontrado em 'counselor_peers' no peer_config.json"
             )
 
-        # O IP local e o nome agora são lidos DIRETAMENTE do arquivo de configuração
-        self.local_ip = self.local_info.get('ip')
-        self.node_id = self.local_info.get('name', f'node_{local_port}')
+        # A porta local e o nome agora são lidos DIRETAMENTE do arquivo de configuração
+        self.local_port = self.local_info.get('port')
+        self.node_id = self.local_info.get('name', f'node_{local_ip}')
 
     def _load_config(self):
         """Carrega o arquivo de configuração JSON."""
@@ -42,9 +42,12 @@ class ConfigManager:
             print(f"ERRO: Arquivo de configuração inválido.")
             sys.exit(1)
 
-    def _find_local_info_by_port(self, port):
-        """Encontra a entrada do nó local na lista de pares pela porta."""
-        return next((p for p in self.peers if p['port'] == port), None)
+    def _find_local_info_by_ip(self, ip):
+        """Encontra a entrada do nó local na lista de pares pelo IP."""
+        # Assume que um IP é único para um nó.
+        # Se você precisar executar vários nós na mesma máquina,
+        # esta lógica precisaria ser mais complexa (IP + Porta).
+        return next((p for p in self.peers if p['ip'] == ip), None)
 
     def get_local_info(self):
         """Retorna as informações do nó local (IP/Porta/Nome)."""
@@ -56,5 +59,5 @@ class ConfigManager:
 
     def get_other_peers(self):
         """Encontra todos os pares que NÃO são este nó local."""
-        # Compara pela porta, que deve ser única
-        return [p for p in self.peers if p['port'] != self.local_port]
+        # Filtra com base na combinação de IP e Porta
+        return [p for p in self.peers if p['ip'] != self.local_ip or p['port'] != self.local_port]

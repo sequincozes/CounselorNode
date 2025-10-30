@@ -6,7 +6,7 @@ import numpy as np
 BUFFER_SIZE = 1024
 
 
-def _get_local_ip():
+def detect_local_ip():
     """
     Tenta encontrar o IP local "principal" da máquina na rede.
     Usa um truque comum de criar um socket e conectar-se a um IP externo.
@@ -98,10 +98,10 @@ class CounselorServer:
             self.is_running = True
 
             # --- Mensagem de Log Aprimorada ---
-            # Mostra o IP detectado para facilitar a conexão de outros
             display_host = self.host
             if display_host == '0.0.0.0':
-                detected_ip = _get_local_ip()
+                # Re-detecta o IP apenas para exibição
+                detected_ip = detect_local_ip()
                 display_host = f"todas as interfaces (IP detectado: {detected_ip})"
 
             print(f"[SERVIDOR] Escutando por conexões em {display_host} na porta {self.port}...")

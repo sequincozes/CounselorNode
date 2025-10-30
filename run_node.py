@@ -2,6 +2,7 @@ import sys
 import time
 import numpy as np
 from core.node import CounselorNode
+from infrastructure.networking import detect_local_ip  # Importa a função de detecção
 
 
 # Função auxiliar para gerar amostras de teste consistentes
@@ -16,19 +17,14 @@ def generate_test_sample(engine):
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Uso: python run_node.py <porta>")
-        print("Exemplo: python run_node.py 5000")
-        sys.exit(1)
+    # 1. Detecta o IP local
+    local_ip = detect_local_ip()
+    print(f"IP local detectado: {local_ip}")
+    print("Iniciando nó conselheiro...")
 
     try:
-        local_port = int(sys.argv[1])
-    except ValueError:
-        print("Erro: A porta deve ser um número inteiro.")
-        sys.exit(1)
-
-    try:
-        node = CounselorNode(local_port)
+        # 2. Inicializa o nó usando o IP detectado como identificador
+        node = CounselorNode(local_ip)
         node.start()
 
         # Dá tempo para a configuração (treinamento de ML pode levar alguns segundos)

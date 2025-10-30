@@ -12,9 +12,9 @@ from core.classifier_engine import ClassifierEngine
 class CounselorNode:
     """A classe principal que representa o IDS (Detector) na Counselors Network."""
 
-    def __init__(self, port):
-        # Componente 1: Configuração (Inicializado com a porta local)
-        self.peer_manager = ConfigManager(port)
+    def __init__(self, detected_ip):
+        # Componente 1: Configuração (Inicializado com o IP detectado)
+        self.peer_manager = ConfigManager(detected_ip)
         local_info = self.peer_manager.get_local_info()
 
         # Informações lidas do config
@@ -32,14 +32,14 @@ class CounselorNode:
         self.client = CounselorClient(self.node_id, self.peer_manager)
         self.server = CounselorServer(
             self.bind_host,  # Escuta em 0.0.0.0
-            self.port,
+            self.port,  # Usa a porta encontrada no config
             self.node_id,
             self._execute_counseling_logic  # Passa a lógica real do nó como callback
         )
 
         print(f"--- {self.node_id.upper()} INICIADO ---")
-        print(f"IP de Configuração (para outros pares): {self.config_ip}:{self.port}")
-        print(f"Endereço de Bind (Escutando em):   {self.bind_host}:{self.port}")
+        print(f"IP de Configuração (Encontrado via {detected_ip}): {self.config_ip}:{self.port}")
+        print(f"Endereço de Bind (Escutando em):             {self.bind_host}:{self.port}")
         print("-" * 30)
 
     def start(self):

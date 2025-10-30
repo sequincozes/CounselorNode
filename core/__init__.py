@@ -11,6 +11,7 @@ class CounselorNode:
 
     def __init__(self, node_id):
         self.node_id = node_id
+        print(f"Node ID: {node_id}")
 
         # Componente 1: Configuração e Peers
         self.peer_manager = ConfigManager(node_id)
