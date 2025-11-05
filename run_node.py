@@ -7,13 +7,17 @@ from infrastructure.networking import detect_local_ip  # Importa a função de d
 
 # Função auxiliar para gerar amostras de teste consistentes
 def generate_test_sample(engine):
-    """Gera uma amostra aleatória do conjunto de teste do ClassifierEngine."""
+    """
+    Gera uma amostra aleatória do conjunto de teste do ClassifierEngine
+    e seu respectivo ground truth (rótulo real).
+    """
     if engine.X_test is not None and len(engine.X_test) > 0:
         idx = np.random.randint(0, len(engine.X_test))
-        # Retorna a amostra (já padronizada)
-        return engine.X_test[idx]
+        # Retorna a amostra (já padronizada) e o rótulo real (ground truth)
+        return engine.X_test[idx], engine.y_test[idx]
 
-    return np.zeros(engine.config['n_features'])
+    # Fallback
+    return np.zeros(engine.config['n_features']), "N/A"
 
 
 def main():
@@ -39,8 +43,10 @@ def main():
         # Simulação de Tráfego (agora todos os nós fazem isso)
         while True:
             # Amostra 1: Deve ser classificada ou gerar conflito
-            suspect_sample_data = generate_test_sample(node.engine)
-            node.check_traffic_and_act(suspect_sample_data)
+            suspect_sample_data, ground_truth = generate_test_sample(node.engine)
+
+            # Passa a amostra e o ground truth para o nó
+            node.check_traffic_and_act(suspect_sample_data, ground_truth)
 
             time.sleep(5)  # Espera entre as amostras
 
