@@ -5,17 +5,17 @@
   "counselor_peers": [
     {
       "name": "conselheiro_1",
-      "ip": "192.168.137.70",
+      "ip": "192.168.1.103",
       "port": 5000
     },
     {
       "name": "conselheiro_2",
-      "ip": "192.168.137.155",
-      "port": 5000
+      "ip": "192.168.1.103",
+      "port": 5001
     }
   ],
   "ml_config": {
-    "training_dataset_source": "auto",
+    "training_dataset_source": "C:\\Users\\giova\\Desktop\\Mestrado\\Rede de conselhos\\Dataset_IDS_UAV.csv",
     "n_samples": 569,
     "n_features": 31,
     "n_classes": 3,
