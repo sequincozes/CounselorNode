@@ -66,12 +66,29 @@ class ClassifierEngine:
                 f"INFO: Using fixed dataset parameters: {X.shape[0]} samples, {X.shape[1]} features, {np.unique(y).size} classes.")
 
         else:
-            # Option 2: Placeholder for loading actual data from a file path/name
+            # Opção para carregar um dataset externo
             print(f"INFO: Loading data from specified source: {data_source}...")
-            # --- REAL DATA LOADING PLACEHOLDER ---
-            raise NotImplementedError(
-                f"Loading data from a specified file ('{data_source}') is not yet implemented. Please set 'training_dataset_source' to 'auto' for now."
-            )
+
+            try:
+                df = pd.read_csv(data_source)
+            except Exception as e:
+                print(f"ERROR: Could not read dataset from {data_source}. Error: {e}")
+                sys.exit(1)
+
+            # Verifica se existe uma coluna alvo
+            target_col = self.config.get('target_column', None)
+            if target_col is None:
+                print("WARNING: No 'target_column' specified in configuration. Assuming last column is the target.")
+                target_col = df.columns[-1]
+
+            if target_col not in df.columns:
+                print(f"ERROR: Target column '{target_col}' not found in dataset.")
+                sys.exit(1)
+
+            y = df[target_col].values
+            X = df.drop(columns=[target_col]).values
+
+            print(f"INFO: Dataset loaded from file. {X.shape[0]} samples, {X.shape[1]} features.")
             # -------------------------------------
 
         # Check if data was loaded successfully
