@@ -36,145 +36,193 @@ class ClassifierEngine:
         self.n_clusters = self.config.get('clustering_n_clusters', 5)
         # Threshold is 5% (0.05) for F1-score equivalence
         self.f1_threshold = self.config.get('f1_threshold', 0.05)
-        self.cluster_classifiers = {}  # {cluster_id: {'best_models': [...]}}
-        self.kmeans = None
+        self.cluster_classifiers = {}  # {cluster_id: {'best_models': [model1, model2], 'max_f1': 0.95}}
         self.scaler = None
-        self.X_test = None  # Store test data for simulation
-        self.y_test = None  # Store test labels for simulation (ground truth)
+        self.kmeans = None
+        self.X_test = None
 
-        # Start the training process upon initialization
-        self._load_and_train()
+        self._load_data()
+        self._train_dcs_model()
 
-    def _load_and_train(self):
-        """Loads data, scales, clusters, and trains all classifiers for DCS."""
-        print("Iniciando motor de classificação (Carregamento e Treinamento)...")
-        try:
-            # 1. Load Data
-            # Using Breast Cancer dataset as a placeholder
-            if self.config.get('training_dataset_source') == 'auto':
-                data = load_breast_cancer()
-                X, y = data.data, data.target
-                # Ensure it matches config (example data might not)
-                X = X[:, :self.config.get('n_features', 30)]
-            else:
-                # Load from CSV
-                dataset_path = self.config.get('training_dataset_source')
-                df = pd.read_csv(dataset_path)
-                # Assuming the last column is the target
-                X = df.iloc[:, :-1].values
-                y = df.iloc[:, -1].values
 
-            # 2. Scale and Split Data
-            self.scaler = StandardScaler()
-            X_scaled = self.scaler.fit_transform(X)
-            X_train, self.X_test, y_train, self.y_test = train_test_split(
-                X_scaled, y, test_size=0.3, random_state=42
-            )
+    def _load_data(self):
+        """
+        Loads the dataset based on the 'training_dataset_source' configuration.
+        If 'auto', uses the Breast Cancer dataset from sklearn.
+        If a path is provided, it should load data from that path.
+        """
+        data_source = self.config.get('training_dataset_source', 'auto')
+        X, y = None, None
 
-            # 3. K-Means Clustering
-            self.kmeans = KMeans(n_clusters=self.n_clusters, random_state=42, n_init=10)
-            train_clusters = self.kmeans.fit_predict(X_train)
-            print(f"Treinamento K-Means concluído. {self.n_clusters} clusters definidos.")
+        if data_source == 'auto':
+            # Option 1: Use sklearn's load_breast_cancer dataset as the standard dataset
+            print("INFO: 'auto' source detected. Loading standard Scikit-learn 'Breast Cancer' dataset...")
 
-            # 4. Train Classifiers for each Cluster (DCS)
-            classifier_names = self.config.get('classifiers', ['DecisionTreeClassifier'])
+            data = load_breast_cancer()
+            X = data.data
+            y = data.target
 
-            for cluster_id in range(self.n_clusters):
-                # Get data points for this cluster
-                cluster_indices = np.where(train_clusters == cluster_id)[0]
-                if len(cluster_indices) == 0:
-                    continue  # Skip empty clusters
+            print(
+                f"INFO: Using fixed dataset parameters: {X.shape[0]} samples, {X.shape[1]} features, {np.unique(y).size} classes.")
 
-                X_cluster, y_cluster = X_train[cluster_indices], y_train[cluster_indices]
+        else:
+            # Opção para carregar um dataset externo
+            print(f"INFO: Loading data from specified source: {data_source}...")
 
-                best_models_for_cluster = []
-                max_f1 = -1.0
+            try:
+                df = pd.read_csv(data_source)
+            except Exception as e:
+                print(f"ERROR: Could not read dataset from {data_source}. Error: {e}")
+                sys.exit(1)
 
-                for name in classifier_names:
-                    if name not in CLASSIFIER_MAP:
-                        continue
+            # Verifica se existe uma coluna alvo
+            target_col = self.config.get('target_column', None)
+            if target_col is None:
+                print("WARNING: No 'target_column' specified in configuration. Assuming last column is the target.")
+                target_col = df.columns[-1]
 
-                    model = CLASSIFIER_MAP[name]()
+            if target_col not in df.columns:
+                print(f"ERROR: Target column '{target_col}' not found in dataset.")
+                sys.exit(1)
 
-                    # Ensure cluster has enough samples for all classes
-                    if len(np.unique(y_cluster)) < 2:
-                        # Cannot train or get F1 score
-                        continue
+            y = df[target_col].values
+            X = df.drop(columns=[target_col]).values
 
-                    model.fit(X_cluster, y_cluster)
+            print(f"INFO: Dataset loaded from file. {X.shape[0]} samples, {X.shape[1]} features.")
+            # -------------------------------------
 
-                    # Evaluate on test set
-                    test_clusters = self.kmeans.predict(self.X_test)
-                    test_cluster_indices = np.where(test_clusters == cluster_id)[0]
 
-                    if len(test_cluster_indices) == 0:
-                        continue  # No test samples in this cluster
-
-                    X_test_cluster, y_test_cluster = self.X_test[test_cluster_indices], self.y_test[
-                        test_cluster_indices]
-
-                    if len(np.unique(y_test_cluster)) < 2:
-                        continue  # Cannot get F1 score if only one class in test set
-
-                    y_pred = model.predict(X_test_cluster)
-                    f1 = f1_score(y_test_cluster, y_pred, average='weighted', zero_division=0)
-
-                    # Store model if its F1 is high enough
-                    if f1 > (max_f1 - self.f1_threshold):
-                        if f1 > max_f1:
-                            max_f1 = f1
-
-                        best_models_for_cluster.append({
-                            'name': name,
-                            'f1': f1,
-                            'model': model
-                        })
-
-                # Filter only models that are "best" (within threshold)
-                if best_models_for_cluster:
-                    final_best_models = [m for m in best_models_for_cluster if m['f1'] >= (max_f1 - self.f1_threshold)]
-                    self.cluster_classifiers[cluster_id] = {'best_models': final_best_models}
-                    # print(f"Cluster {cluster_id}: {len(final_best_models)} melhores modelos (Max F1: {max_f1:.4f})")
-
-            print("Motor de classificação pronto.")
-
-        except FileNotFoundError:
-            print(f"ERRO: Arquivo de dataset não encontrado em: {self.config.get('training_dataset_source')}")
-            sys.exit(1)
-        except Exception as e:
-            print(f"ERRO durante o treinamento do Motor de ML: {e}")
+        # Check if data was loaded successfully
+        if X is None or y is None:
+            print("ERROR: Data could not be loaded or generated.")
             sys.exit(1)
 
-    def classify_and_check_conflict(self, sample_data_array):
-        """
-        Performs Dynamic Classifier Selection (DCS) and checks for conflicts.
-        Returns a dictionary with the result.
-        """
-        # 1. Preprocess the single sample
-        try:
-            sample_scaled = self.scaler.transform(sample_data_array.reshape(1, -1))
-        except Exception as e:
-            print(f"ERRO de Engine: Falha ao normalizar amostra: {e}")
-            return {"classification": "UNKNOWN", "conflict": False, "decisions": [], "cluster_id": "N/A"}
+        # Split and Standardize data (common to both options)
+        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(X, y, test_size=0.7, random_state=42)
 
+        self.scaler = StandardScaler()
+        self.X_train = self.scaler.fit_transform(self.X_train)
+        self.X_test = self.scaler.transform(self.X_test)
+
+        print(f"DATASET: {self.X_train.shape[0]} samples for training.")
+
+    def _apply_clustering(self):
+        """Applies the K-Means algorithm to the training data."""
+        print(f"DCS: Applying K-Means with K={self.n_clusters}...")
+        self.kmeans = KMeans(n_clusters=self.n_clusters, random_state=42, n_init='auto')
+        self.kmeans.fit(self.X_train)
+        self.labels = self.kmeans.labels_
+
+        # Structures data by cluster
+        clustered_data = {}
+        for cluster_id in range(self.n_clusters):
+            idx = np.where(self.labels == cluster_id)[0]
+            clustered_data[cluster_id] = {
+                'X': self.X_train[idx],
+                'y': self.y_train[idx]
+            }
+        return clustered_data
+
+    def _train_and_evaluate(self, cluster_data):
+        """
+        Trains and evaluates all candidate classifiers for a given cluster,
+        using F1-Score as the metric.
+        """
+        results = {}
+        X_cluster, y_cluster = cluster_data['X'], cluster_data['y']
+
+        if len(X_cluster) == 0:
+            return results
+
+        for name in self.config['classifiers']:
+            try:
+                ClassifierClass = CLASSIFIER_MAP[name]
+                model = ClassifierClass(random_state=42) if name not in ['GaussianNB',
+                                                                         'KNeighborsClassifier'] else ClassifierClass()
+
+                model.fit(X_cluster, y_cluster)
+
+                # Evaluates on the cluster's own sub-dataset
+                y_pred = model.predict(X_cluster)
+                # Use 'weighted' average since classes are likely imbalanced after clustering
+                f1 = f1_score(y_cluster, y_pred, average='weighted', zero_division=0)
+
+                results[name] = {'model': model, 'f1_score': f1}
+            except Exception as e:
+                print(f"WARNING: Classifier {name} failed for cluster (Error: {e}).")
+
+        return results
+
+    def _train_dcs_model(self):
+        """
+        Implements the main DCS logic: K-Means, Evaluation, Selection.
+        Prints the F1-Score of all classifiers for each cluster.
+        """
+        clustered_data = self._apply_clustering()
+
+        print("DCS: Training and evaluating classifiers per cluster...")
+
+        for cluster_id, data in clustered_data.items():
+            evaluation_results = self._train_and_evaluate(data)
+
+            print(f"\n--- Cluster {cluster_id} (N={len(data['X'])}) ---")
+
+            if not evaluation_results:
+                print(f"Cluster {cluster_id}: No data or classifiers failed.")
+                continue
+
+            # Print detailed F1-Scores
+            scores = {}
+            for name, res in evaluation_results.items():
+                scores[name] = res['f1_score']
+                print(f"  > {name}: F1-Score = {res['f1_score']:.4f}")
+
+            max_f1 = max(scores.values())
+
+            # Selects all classifiers that are within the 5% threshold (DCS Selection Logic)
+            best_classifiers = []
+
+            for name, res in evaluation_results.items():
+                if res['f1_score'] >= (max_f1 - self.f1_threshold):
+                    best_classifiers.append({
+                        'name': name,
+                        'model': res['model'],
+                        'f1': res['f1_score']
+                    })
+
+            self.cluster_classifiers[cluster_id] = {
+                'best_models': best_classifiers,
+                'max_f1': max_f1
+            }
+
+            model_names = [c['name'] for c in best_classifiers]
+            print(f"DCS SELECTION: Max F1={max_f1:.4f}. Threshold={self.f1_threshold:.4f}.")
+            print(f"DCS SELECTION: Selected Models: {', '.join(model_names)}")
+
+    def classify_and_check_conflict(self, sample_data):
+        """
+        Classifies a sample and checks for conflict among the best classifiers.
+        Returns the classification result, conflict status, and the individual decisions.
+        """
+        # 1. Preprocess and find the cluster
+        sample_scaled = self.scaler.transform(sample_data.reshape(1, -1))
         if self.kmeans is None:
-            return {"classification": "UNKNOWN", "conflict": False, "decisions": [], "cluster_id": "N/A"}
+            return {"classification": "NORMAL", "conflict": False, "decisions": ["Engine not initialized."]}
 
-        # 2. Find cluster and get best models
         cluster_id = self.kmeans.predict(sample_scaled)[0]
 
         if cluster_id not in self.cluster_classifiers:
-            # No models trained for this cluster
-            return {"classification": "UNKNOWN", "conflict": False, "decisions": [], "cluster_id": int(cluster_id)}
+            return {"classification": "UNKNOWN", "conflict": False, "decisions": ["Unmapped cluster."]}
 
         dcs_data = self.cluster_classifiers[cluster_id]
+
+        # 2. Classify with selected models and record decisions
         decisions = []
+        for classifier_info in dcs_data['best_models']:
+            prediction = classifier_info['model'].predict(sample_scaled)[0]
+            decisions.append(str(prediction))
 
-        for model_info in dcs_data['best_models']:
-            prediction = model_info['model'].predict(sample_scaled)[0]
-            decisions.append(str(prediction))  # Store decisions as strings
-
-        # 3. Check for conflict (more than one unique decision)
+            # 3. Check for conflict (more than one unique decision)
         unique_decisions = np.unique(decisions)
         conflict = len(unique_decisions) > 1
 
@@ -190,3 +238,31 @@ class ClassifierEngine:
             "decisions": decisions,
             "cluster_id": int(cluster_id)
         }
+
+    def counseling_logic(self, sample_data):
+        """
+        High-confidence classification logic used when the node acts as Counselor.
+        Uses the model with the ABSOLUTE HIGHEST F1-Score in the cluster.
+        """
+        # 1. Preprocess and find the cluster
+        sample_scaled = self.scaler.transform(sample_data.reshape(1, -1))
+        # if self.kmeans is None:
+        #     return "UNKNOWN"  # Cannot counsel if not trained
+
+        # cluster_id = self.kmeans.predict(sample_scaled)[0]
+
+        # if cluster_id not in self.cluster_classifiers:
+        #     return "UNKNOWN"
+
+        # dcs_data = self.cluster_classifiers[cluster_id]
+
+        # 2. Use the model with the absolutely highest F1-Score
+        # best_model_info = max(dcs_data['best_models'], key=lambda x: x['f1'])
+
+        # final_prediction = best_model_info['model'].predict(sample_scaled)[0]
+        final_prediction = self.classify_and_check_conflict(sample_data)
+        print("##### Amostra que deu conflito no amiguinho: ")
+        print(sample_data)
+        print("##### Minha decisão sobre a amostra que deu conflito no amiguinho: ")
+        print(final_prediction)
+        return str(final_prediction)

@@ -34,7 +34,7 @@ class CounselorServer:
         self.host = host  # Será '0.0.0.0'
         self.port = port
         self.node_id = node_id
-        self.counseling_logic_fn = counseling_fn  # Callback (agora é _execute_counseling_logic)
+        self.counseling_logic_fn = counseling_fn
         self.is_running = False
 
         # Injeção de dependência para Logging e obtenção do IP local
@@ -61,38 +61,26 @@ class CounselorServer:
             amostra_str = request.get('amostra', 'N/A')
             ground_truth = request.get('ground_truth', 'N/A')  # Captura o ground truth
 
-            # --- LÓGICA DE CLASSIFICAÇÃO (AGORA COM RECURSÃO DE CONSELHO) ---
+            # --- LÓGICA DE CLASSIFICAÇÃO REAL NO SERVIDOR ---
             try:
                 amostra_array = np.array(json.loads(amostra_str), dtype=float)
+                final_prediction_str = self.counseling_logic_fn(amostra_array)
 
-                #
-                # --- MUDANÇA PRINCIPAL ---
-                # Chama a função de callback (_execute_counseling_logic em node.py)
-                # passando as informações do solicitante.
-                # Esta função agora retorna a *decisão final* (string)
-                #
-                final_prediction_str = self.counseling_logic_fn(
-                    amostra_array,
-                    requester_id,
-                    ip_origem,
-                    ground_truth
-                )
+                print("#####                 final_prediction_str = self.counseling_logic_fn(amostra_array)")
+                print(final_prediction_str)
 
-                # A lógica de mapeamento (string -> decisão) foi movida para
-                # _execute_counseling_logic. A string retornada já é a decisão.
-                decision = final_prediction_str
-
-                if decision == "NORMAL":
-                    counsel_msg = "Análise concluída. Resultado: Tráfego normal."
-                elif decision == "UNKNOWN":
-                    counsel_msg = "Análise falhou: Nó conselheiro não pôde determinar."
-                elif decision == "INTRUSION":
-                    counsel_msg = f"Intrusão Confirmada (Decisão Final do Conselheiro)."
+                if final_prediction_str == 'NORMAL':
+                    decision = "NORMAL"
+                    counsel_msg = "Análise concluída. Resultado: Tráfego normal (Alta Confiança - DCS)."
+                elif final_prediction_str == 'UNKNOWN':
+                    decision = "UNKNOWN"
+                    counsel_msg = "Análise falhou: Cluster não mapeado no Nó Conselheiro."
                 else:
-                    counsel_msg = f"Decisão: {decision}"
+                    decision = "INTRUSION"
+                    counsel_msg = f"Intrusão Confirmada: Classe {final_prediction_str} (Alta Confiança via DCS)."
 
             except Exception as e:
-                print(f"ERRO DE SERVIDOR: Lógica de aconselhamento falhou: {e}")
+                print(f"ERRO DE SERVIDOR: Classificação falhou: {e}")
                 decision = "ERROR_CLASSIFICATION"
                 counsel_msg = "Motor de classificação falhou nesta amostra."
             # ------------------------------------------------
@@ -106,7 +94,7 @@ class CounselorServer:
             }
 
             conn.sendall(json.dumps(response).encode('utf-8'))
-            print(f"[SERVIDOR] Conselho final enviado para {requester_id}: '{response['decision']}'.")
+            print(f"[SERVIDOR] Conselho enviado: '{response['decision']}'.")
 
         except Exception as e:
             print(f"[SERVIDOR] Erro processando pedido: {e}")
@@ -118,7 +106,6 @@ class CounselorServer:
             end_time = time.time()
             processing_time_ms = (end_time - start_time) * 1000
 
-            # Loga a *resposta final* que este servidor deu.
             self.logger.log_conselho_recebido(
                 name_solicitante=requester_id,
                 name_conselheiro=self.node_id,

@@ -27,8 +27,9 @@ class CounselorNode:
         self.bind_host = '0.0.0.0'
 
         # Componente 1.5: Logger
-        # O logger é instanciado aqui e injetado nos componentes de rede
-        # (Corrigindo o caminho do log para a raiz, como solicitado anteriormente)
+        # --- CORREÇÃO AQUI ---
+        # A chamada agora passa 'use_log_folder=False' para salvar na RAIZ.
+        # O logger.py (acima) agora aceita este argumento.
         self.logger = CounselorLogger(self.node_id, use_log_folder=False)
         print(f"Logger inicializado. Logs serão salvos na raiz do projeto.")
 
