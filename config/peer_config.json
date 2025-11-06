@@ -10,12 +10,17 @@
     },
     {
       "name": "conselheiro_2",
-      "ip": "192.168.137.132",
-      "port": 5001
+      "ip": "192.168.137.28",
+      "port": 5000
+    },
+    {
+      "name": "conselheiro_3",
+      "ip": "192.168.137.119",
+      "port": 5000
     }
   ],
   "ml_config": {
-    "training_dataset_source": "auto",
+    "training_dataset_source": "E:\\CounselorNode\\Dataset_IDS_UAV.csv",
     "n_samples": 569,
     "n_features": 31,
     "n_classes": 3,
