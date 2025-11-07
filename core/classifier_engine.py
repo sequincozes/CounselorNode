@@ -246,23 +246,19 @@ class ClassifierEngine:
         """
         # 1. Preprocess and find the cluster
         sample_scaled = self.scaler.transform(sample_data.reshape(1, -1))
-        # if self.kmeans is None:
-        #     return "UNKNOWN"  # Cannot counsel if not trained
+        if self.kmeans is None:
+            return "UNKNOWN"  # Cannot counsel if not trained
 
-        # cluster_id = self.kmeans.predict(sample_scaled)[0]
+        cluster_id = self.kmeans.predict(sample_scaled)[0]
 
-        # if cluster_id not in self.cluster_classifiers:
-        #     return "UNKNOWN"
+        if cluster_id not in self.cluster_classifiers:
+            return "UNKNOWN"
 
-        # dcs_data = self.cluster_classifiers[cluster_id]
+        dcs_data = self.cluster_classifiers[cluster_id]
 
         # 2. Use the model with the absolutely highest F1-Score
-        # best_model_info = max(dcs_data['best_models'], key=lambda x: x['f1'])
+        best_model_info = max(dcs_data['best_models'], key=lambda x: x['f1'])
 
-        # final_prediction = best_model_info['model'].predict(sample_scaled)[0]
-        final_prediction = self.classify_and_check_conflict(sample_data)
-        print("##### Amostra que deu conflito no amiguinho: ")
-        print(sample_data)
-        print("##### Minha decisão sobre a amostra que deu conflito no amiguinho: ")
-        print(final_prediction)
+        final_prediction = best_model_info['model'].predict(sample_scaled)[0]
+
         return str(final_prediction)

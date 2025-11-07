@@ -66,10 +66,7 @@ class CounselorServer:
                 amostra_array = np.array(json.loads(amostra_str), dtype=float)
                 final_prediction_str = self.counseling_logic_fn(amostra_array)
 
-                print("#####                 final_prediction_str = self.counseling_logic_fn(amostra_array)")
-                print(final_prediction_str)
-
-                if final_prediction_str == 'NORMAL':
+                if final_prediction_str == '0':
                     decision = "NORMAL"
                     counsel_msg = "Análise concluída. Resultado: Tráfego normal (Alta Confiança - DCS)."
                 elif final_prediction_str == 'UNKNOWN':
