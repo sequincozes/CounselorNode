@@ -3,8 +3,6 @@ import os
 import threading
 from datetime import datetime
 
-LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'logs')
-
 # Colunas para ambos os arquivos de log
 LOG_HEADERS = [
     "timestamp",
@@ -21,15 +19,25 @@ LOG_HEADERS = [
 class CounselorLogger:
     """Gerencia a escrita de logs em CSV de forma thread-safe."""
 
-    def __init__(self, node_id):
+    # --- CORREÇÃO AQUI ---
+    # Adiciona 'use_log_folder=True' como um argumento opcional
+    def __init__(self, node_id, use_log_folder=True):
         self.node_id = node_id
 
+        # Define o diretório de log com base no argumento
+        if use_log_folder:
+            # Salva em .../raiz_do_projeto/logs/
+            self.log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'logs')
+        else:
+            # Salva em .../raiz_do_projeto/
+            self.log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
+
         # Cria o diretório de logs se não existir
-        os.makedirs(LOG_DIR, exist_ok=True)
+        os.makedirs(self.log_dir, exist_ok=True)
 
         # Define os caminhos dos arquivos de log
-        self.conflitos_log_file = os.path.join(LOG_DIR, f"{self.node_id}_conflitos_gerados.csv")
-        self.conselhos_log_file = os.path.join(LOG_DIR, f"{self.node_id}_conselhos_recebidos.csv")
+        self.conflitos_log_file = os.path.join(self.log_dir, f"{self.node_id}_conflitos_gerados.csv")
+        self.conselhos_log_file = os.path.join(self.log_dir, f"{self.node_id}_conselhos_recebidos.csv")
 
         self.lock = threading.Lock()
 
