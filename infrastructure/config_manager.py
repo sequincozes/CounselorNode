@@ -60,4 +60,4 @@ class ConfigManager:
     def get_other_peers(self):
         """Encontra todos os pares que NÃO são este nó local."""
         # Filtra com base na combinação de IP e Porta
-        return [p for p in self.peers if p['ip'] != self.local_ip or p['port'] != self.local_port]
+        return [p for p in self.peers if p['ip'] != self.local_ip ]

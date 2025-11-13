@@ -230,7 +230,7 @@ class ClassifierEngine:
             final_class = "CONFLICT_DETECTED"
         else:
             # Takes the majority/unique decision
-            final_class = unique_decisions[0] if len(unique_decisions) > 0 else "NORMAL"
+            final_class = unique_decisions[0] if len(unique_decisions) > 0 else "Nenhum classificador foi capaz de classificar." ## Checagem provavelmente desnecessária
 
         return {
             "classification": final_class,
@@ -244,21 +244,6 @@ class ClassifierEngine:
         High-confidence classification logic used when the node acts as Counselor.
         Uses the model with the ABSOLUTE HIGHEST F1-Score in the cluster.
         """
-        # 1. Preprocess and find the cluster
-        sample_scaled = self.scaler.transform(sample_data.reshape(1, -1))
-        # if self.kmeans is None:
-        #     return "UNKNOWN"  # Cannot counsel if not trained
-
-        # cluster_id = self.kmeans.predict(sample_scaled)[0]
-
-        # if cluster_id not in self.cluster_classifiers:
-        #     return "UNKNOWN"
-
-        # dcs_data = self.cluster_classifiers[cluster_id]
-
-        # 2. Use the model with the absolutely highest F1-Score
-        # best_model_info = max(dcs_data['best_models'], key=lambda x: x['f1'])
-
         # final_prediction = best_model_info['model'].predict(sample_scaled)[0]
         final_prediction = self.classify_and_check_conflict(sample_data)
         print("##### Amostra que deu conflito no amiguinho: ")
