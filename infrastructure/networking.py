@@ -211,6 +211,8 @@ class CounselorClient:
             print("--- CONSELHO RECEBIDO ---")
             print(f"Decisão do Conselheiro ({response['counselor_id']}): {log_decision}")
             print("--------------------------")
+            time.sleep(30)  # Espera entre as amostras
+            print("DANDO UMA CALMADINHA")
 
         except socket.timeout:
             print(f"[CLIENTE] Erro: Timeout tentando comunicar com {peer_ip}:{peer_port}")

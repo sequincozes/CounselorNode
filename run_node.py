@@ -43,10 +43,10 @@ def main():
         # Simulação de Tráfego (agora todos os nós fazem isso)
         while True:
             # Amostra 1: Deve ser classificada ou gerar conflito
-            suspect_sample_data, ground_truth = generate_test_sample(node.engine)
+            # suspect_sample_data, ground_truth = generate_test_sample(node.engine)
 
             # Passa a amostra e o ground truth para o nó
-            node.check_traffic_and_act(suspect_sample_data, ground_truth)
+            # node.check_traffic_and_act(suspect_sample_data, ground_truth)
 
             time.sleep(5)  # Espera entre as amostras
 
