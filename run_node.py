@@ -29,7 +29,11 @@ def main():
     try:
         # 2. Inicializa o nó usando o IP detectado como identificador
         node = CounselorNode(local_ip)
+        print("Vai chamar o node.start...")
+
         node.start()
+
+        print("O nó startou...")
 
         # Dá tempo para a configuração (treinamento de ML pode levar alguns segundos)
         # e para outros nós iniciarem.
@@ -43,12 +47,10 @@ def main():
         # Simulação de Tráfego (agora todos os nós fazem isso)
         while True:
             # Amostra 1: Deve ser classificada ou gerar conflito
-            suspect_sample_data, ground_truth = generate_test_sample(node.engine)
-
+            # suspect_sample_data, ground_truth = generate_test_sample(node.engine)
             # Passa a amostra e o ground truth para o nó
-            node.check_traffic_and_act(suspect_sample_data, ground_truth)
-
-            time.sleep(5)  # Espera entre as amostras
+            # node.check_traffic_and_act(suspect_sample_data, ground_truth)
+            time.sleep(1)  # Espera entre as amostras
 
 
     except KeyboardInterrupt:

@@ -2,7 +2,9 @@ import json
 import socket
 import threading
 import numpy as np
-import time  # Importa 'time' para medir o processamento
+import time
+import os
+import sys
 
 BUFFER_SIZE = 1024
 
@@ -34,12 +36,17 @@ class CounselorServer:
         self.host = host  # Será '0.0.0.0'
         self.port = port
         self.node_id = node_id
+        # counseling_fn é o _execute_counseling_logic do node.py
         self.counseling_logic_fn = counseling_fn
         self.is_running = False
 
-        # Injeção de dependência para Logging e obtenção do IP local
         self.logger = logger
         self.peer_manager = peer_manager
+
+        # Cria o socket
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server_socket.bind((self.host, self.port))
 
     def _handle_request(self, conn, addr):
         """Processa um pedido de aconselhamento recebido e LOGA o evento."""
@@ -51,6 +58,7 @@ class CounselorServer:
         decision = "ERROR"
         requester_id = "Unknown"
         ground_truth = "N/A"
+        requester_chain = []  # Inicializa a cadeia de IPs
 
         try:
             data = conn.recv(BUFFER_SIZE).decode('utf-8')
@@ -59,15 +67,18 @@ class CounselorServer:
             request = json.loads(data)
             requester_id = request.get('requester_id', 'Unknown')
             amostra_str = request.get('amostra', 'N/A')
-            ground_truth = request.get('ground_truth', 'N/A')  # Captura o ground truth
+            ground_truth = request.get('ground_truth', 'N/A')
+            # --- NOVO: Extrai a cadeia de IPs da requisição ---
+            requester_chain = request.get('requester_chain', [])
+            # ------------------------------------------------
 
             # --- LÓGICA DE CLASSIFICAÇÃO REAL NO SERVIDOR ---
             try:
                 amostra_array = np.array(json.loads(amostra_str), dtype=float)
-                final_prediction_str = self.counseling_logic_fn(amostra_array)
 
-                print("#####                 final_prediction_str = self.counseling_logic_fn(amostra_array)")
-                print(final_prediction_str)
+                # O callback agora recebe todos os argumentos necessários
+                final_prediction_str = self.counseling_logic_fn(amostra_array, requester_id, ip_origem, ground_truth,
+                                                                requester_chain)
 
                 if final_prediction_str == 'NORMAL':
                     decision = "NORMAL"
@@ -75,7 +86,13 @@ class CounselorServer:
                 elif final_prediction_str == 'UNKNOWN':
                     decision = "UNKNOWN"
                     counsel_msg = "Análise falhou: Cluster não mapeado no Nó Conselheiro."
+                # --- NOVO: Lógica de Loop Fechado ---
+                elif final_prediction_str == 'LOOP_CLOSED':
+                    decision = "LOOP_CLOSED"
+                    counsel_msg = "Alerta: Loop de aconselhamento fechado. Ninguém tem a resposta. Decisão local de melhor modelo usada."
+                # ------------------------------------
                 else:
+                    # Assumimos que qualquer outra coisa é uma classe de intrusão (ex: '1', '2')
                     decision = "INTRUSION"
                     counsel_msg = f"Intrusão Confirmada: Classe {final_prediction_str} (Alta Confiança via DCS)."
 
@@ -100,7 +117,8 @@ class CounselorServer:
             print(f"[SERVIDOR] Erro processando pedido: {e}")
             decision = f"ERROR_REQUEST: {type(e).__name__}"
         finally:
-            conn.close()
+            if 'conn' in locals():
+                conn.close()
 
             # --- LOGGING ---
             end_time = time.time()
@@ -118,43 +136,36 @@ class CounselorServer:
             # ---------------
 
     def start_listening(self):
-        """Inicia o servidor em uma thread separada para escutar por pedidos P2P."""
-        try:
-            server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            server_socket.bind((self.host, self.port))
-            server_socket.listen(5)
-            self.is_running = True
+        """Inicia o servidor em uma thread separada para não bloquear o nó principal."""
+        self.is_running = True
+        self.server_socket.listen(5)  # Permite 5 conexões enfileiradas
 
-            display_host = self.host
-            if display_host == '0.0.0.0':
-                detected_ip = detect_local_ip()
-                display_host = f"todas as interfaces (IP detectado: {detected_ip})"
+        print(f"[SERVIDOR] Escutando em {self.host}:{self.port}...")
 
-            print(f"[SERVIDOR] Escutando por conexões em {display_host} na porta {self.port}...")
+        def listen_thread():
+            while self.is_running:
+                try:
+                    conn, addr = self.server_socket.accept()
+                    # Cria uma nova thread para lidar com o pedido
+                    client_thread = threading.Thread(
+                        target=self._handle_request, args=(conn, addr)
+                    )
+                    client_thread.daemon = True
+                    client_thread.start()
+                except socket.timeout:
+                    # Apenas continua
+                    continue
+                except Exception as e:
+                    if self.is_running:
+                        print(f"[SERVIDOR] Erro inesperado: {e}")
+                    break
 
-            def server_loop():
-                while self.is_running:
-                    try:
-                        server_socket.settimeout(1)
-                        conn, addr = server_socket.accept()
-                        client_thread = threading.Thread(target=self._handle_request, args=(conn, addr))
-                        client_thread.daemon = True
-                        client_thread.start()
-                    except socket.timeout:
-                        continue
-                    except Exception as e:
-                        if self.is_running:
-                            print(f"[SERVIDOR] Erro no loop principal: {e}")
-                        break
+        threading.Thread(target=listen_thread, daemon=True).start()
 
-            server_thread = threading.Thread(target=server_loop)
-            server_thread.daemon = True
-            server_thread.start()
-
-        except Exception as e:
-            print(f"[SERVIDOR] Erro iniciando servidor: {e}")
-            raise
+    def stop_listening(self):
+        """Para o servidor."""
+        self.is_running = False
+        self.server_socket.close()
 
 
 class CounselorClient:
@@ -163,12 +174,13 @@ class CounselorClient:
     def __init__(self, node_id, peer_manager, logger):
         self.node_id = node_id
         self.peer_manager = peer_manager
-        self.logger = logger  # Injeção de dependência para Logging
+        self.logger = logger
         self.local_ip = self.peer_manager.get_local_info().get('ip', 'N/A')
 
-    def request_counsel(self, sample_data_array, other_peers_list, ground_truth):
+    def request_counsel(self, sample_data_array, other_peers_list, ground_truth, requester_chain=None):
         """
         Seleciona um par aleatório, envia um pedido de aconselhamento e LOGA o evento.
+        A 'requester_chain' é a lista de IPs que já participaram da cadeia de requisição.
         """
         print("\n--- PEDINDO ACONSELHAMENTO P2P ---")
 
@@ -177,12 +189,17 @@ class CounselorClient:
             return None
 
         # Seleciona um conselheiro aleatório
-        target_peer = other_peers_list[np.random.randint(0, len(other_peers_list))]
+        # O numpy.random.randint foi trocado por random.choice para evitar numpy como dependência de 'random'
+        import random
+        target_peer = random.choice(other_peers_list)
         peer_ip = target_peer['ip']
         peer_port = target_peer['port']
         peer_name = target_peer['name']
 
         print(f"[CLIENTE] Conselheiro Selecionado: {peer_name} ({peer_ip}:{peer_port})")
+
+        if requester_chain is None:
+            requester_chain = []
 
         sample_data_str = json.dumps(sample_data_array.tolist())
 
@@ -190,13 +207,15 @@ class CounselorClient:
             "requester_id": self.node_id,
             "reason": "Conflito de classificador local",
             "amostra": sample_data_str,
-            "ground_truth": str(ground_truth)  # Envia o ground truth para o log do servidor
+            "ground_truth": str(ground_truth),
+            "requester_chain": requester_chain  # NOVO: Envia a cadeia de requisição
         }
         request_message = json.dumps(request_data).encode('utf-8')
 
         start_time = time.time()
         response = None
         log_decision = "ERROR_CONNECTION"
+        client_socket = None
 
         try:
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -204,6 +223,7 @@ class CounselorClient:
             client_socket.connect((peer_ip, peer_port))
             client_socket.sendall(request_message)
 
+            # Recebe a resposta
             response_data = client_socket.recv(BUFFER_SIZE).decode('utf-8')
             response = json.loads(response_data)
             log_decision = response.get('decision', 'ERROR_RESPONSE')
@@ -222,7 +242,7 @@ class CounselorClient:
             print(f"[CLIENTE] Erro na comunicação P2P: {e}")
             log_decision = f"ERROR: {type(e).__name__}"
         finally:
-            if 'client_socket' in locals():
+            if client_socket:
                 client_socket.close()
 
             # --- LOGGING ---
