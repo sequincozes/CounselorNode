@@ -88,7 +88,7 @@ class ClassifierEngine:
             sys.exit(1)
 
             # Split and Standardize data (common to both options)
-        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(X, y, test_size=0.5, random_state=42)
+        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(X, y, test_size=0.9, random_state=42)
 
         self.scaler = StandardScaler()
         self.X_train = self.scaler.fit_transform(self.X_train)

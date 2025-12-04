@@ -1,4 +1,3 @@
-import sys
 import time
 import numpy as np
 from core.node import CounselorNode
@@ -32,7 +31,6 @@ def main():
         print("Vai chamar o node.start...")
 
         node.start()
-
         print("O nó startou...")
 
         # Dá tempo para a configuração (treinamento de ML pode levar alguns segundos)
