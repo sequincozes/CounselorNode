@@ -12,8 +12,17 @@ from infrastructure.logger import CounselorLogger
 from core.classifier_engine import ClassifierEngine
 
 
+
+
 class CounselorNode:
     """A classe principal que representa o IDS (Detector) na Counselors Network."""
+
+    def learnWithConflict(self, sample, label):
+        sample.
+        self.X_train = np.vstack([self.X_train, sample])
+        self.engine._apply_clustering()
+        self.engine._train_dcs_model()
+        pass
 
     def __init__(self, detected_ip):
         # Componente 1: Configuração (Inicializado com o IP detectado)
@@ -98,7 +107,7 @@ class CounselorNode:
                     f"[{self.node_id.upper()}] (Conselheiro) ALERTA: Loop Fechado! Todos os pares já foram consultados na cadeia. Retornando LOOP_CLOSED.")
                 return "LOOP_CLOSED"
 
-                # 5. Pede conselho a um terceiro
+            # 5. Pede conselho a um terceiro
             counsel_response = self.client.request_counsel(
                 sample_data_array,
                 peers_to_ask,
@@ -154,8 +163,6 @@ class CounselorNode:
 
         print(f"[{self.node_id.upper()}] Resultado DCS Local (Cluster {cluster_id}): {classification}")
         print(f"[{self.node_id.upper()}] Decisões Locais (Classes): {decisions}")
-
-        final_decision = "NORMAL"
 
         # 2. Lógica de Gatilho da Rede de Conselheiros
         if conflict:
@@ -213,6 +220,7 @@ class CounselorNode:
                 print(
                     f"[{self.node_id.upper()}] Ação: Conflito resolvido ou sem conselho externo definitivo. Usando decisão final: {final_decision}.")
 
+            learnWithConflict(sample_data_array, final_decision)
             return final_decision
 
         else:
