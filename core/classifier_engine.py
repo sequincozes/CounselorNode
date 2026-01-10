@@ -1,3 +1,4 @@
+import random
 import numpy as np
 import json
 from sklearn.cluster import KMeans
@@ -40,6 +41,7 @@ class ClassifierEngine:
         self.scaler = None
         self.kmeans = None
         self.X_test = None
+        self.test_size = random.random() #test size alterado para Random para testes
 
         self._load_data()
         self._train_dcs_model()
@@ -98,13 +100,13 @@ class ClassifierEngine:
             sys.exit(1)
 
         # Split and Standardize data (common to both options)
-        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(X, y, test_size=0.7, random_state=42)
+        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(X, y, test_size=self.test_size, random_state=42) 
 
         self.scaler = StandardScaler()
         self.X_train = self.scaler.fit_transform(self.X_train)
         self.X_test = self.scaler.transform(self.X_test)
 
-        print(f"DATASET: {self.X_train.shape[0]} samples for training.")
+        print(f"DATASET: {self.X_train.shape[0]} samples for training.\n Test_size={self.test_size:.2f}")
 
     def _apply_clustering(self):
         """Applies the K-Means algorithm to the training data."""

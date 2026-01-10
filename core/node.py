@@ -2,6 +2,7 @@ import sys
 import time
 import numpy as np
 import json
+import random
 
 # Importando camadas
 from infrastructure.config_manager import ConfigManager
@@ -13,7 +14,7 @@ from core.classifier_engine import ClassifierEngine
 class CounselorNode:
     """A classe principal que representa o IDS (Detector) na Counselors Network."""
 
-    def __init__(self, detected_ip):
+    def __init__(self, detected_ip, poison_rate=0.0, delay=0):
         # Componente 1: Configuração (Inicializado com o IP detectado)
         self.peer_manager = ConfigManager(detected_ip)
         local_info = self.peer_manager.get_local_info()
@@ -25,6 +26,13 @@ class CounselorNode:
 
         # O host de "bind" é 0.0.0.0 para escutar em todas as interfaces
         self.bind_host = '0.0.0.0'
+
+        #Taxa de envenamento
+        self.poison_rate = poison_rate
+
+        #Tempo de início do envenamento
+        self.delay = delay
+        self.start_time = time.time()
 
         # Componente 1.5: Logger
         # --- CORREÇÃO AQUI ---
@@ -56,6 +64,26 @@ class CounselorNode:
         """Inicia o servidor e mantém o nó ativo."""
         self.server.start_listening()
 
+    def _poisoning_active(self):
+        """Ativa o envenenamento após o atraso definido"""
+        
+        if self.poison_rate <= 0:
+            return False
+        return (time.time() - self.start_time) >= self.delay
+
+    def _poison(self, decision: str):
+        """
+        Envenena ou não a decisão final ('NORMAL' ou 'INTRUSION')
+        """
+
+        if random.random() >= self.poison_rate:
+            return decision  # Não envenenado
+
+        print(f"[{self.node_id.upper()}] ⚠ *** CONSELHO ENVENENADO EMITIDO ***")
+
+        return "INTRUSION" if decision == "NORMAL" else "NORMAL" # Inverte a decisão
+
+    
     def _execute_counseling_logic(self, sample_data_array, requester_id=None, requester_ip=None,
                                   ground_truth="N/A_from_peer"):
         """
@@ -115,10 +143,14 @@ class CounselorNode:
             # Retorna a classificação local (INTRUSION ou NORMAL)
             # Nota: 'classification' já será '0', '1', '2' etc.
             # Precisamos mapear isso para "INTRUSION" ou "NORMAL"
-            if classification == '0':  # Assumindo que '0' é NORMAL
-                return "NORMAL"
-            else:
-                return "INTRUSION"  # Assumindo que qualquer outra coisa é INTRUSAO
+            decision = "NORMAL" if classification == '0' else "INTRUSION"
+
+            if self._poisoning_active():
+                decision = self._poison(decision) #envenamento de decisão
+
+            print(f"[{self.node_id.upper()}] (Conselheiro) Decisão final enviada: {decision}")
+
+        return decision
 
     def check_traffic_and_act(self, sample_data_array, ground_truth):
         """

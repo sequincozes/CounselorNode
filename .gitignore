@@ -1,2 +1,3 @@
 /.venv/
 /logs/
+/config/peer_config.json
