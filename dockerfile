@@ -13,5 +13,3 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-
-CMD ["python", "-u", "run_node.py", "5000", "--poison-rate", "1", "--delay", "30"]
