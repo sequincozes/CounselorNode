@@ -21,8 +21,8 @@ services:
     hostname: conselheiro_2
     command: >
       python -u run_node.py 5000
-      --poison-rate 1.0
-      --delay 30
+#      --poison-rate 1.0
+#      --delay 30
     networks:
       rede_conselheiros:
         ipv4_address: 172.20.0.3
@@ -35,8 +35,8 @@ services:
     hostname: conselheiro_3
     command: >
       python -u run_node.py 5000
-      --poison-rate 0.5
-      --delay 100
+#      --poison-rate 0.5
+#      --delay 100
     networks:
       rede_conselheiros:
         ipv4_address: 172.20.0.4

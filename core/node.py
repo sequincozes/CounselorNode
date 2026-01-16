@@ -23,7 +23,7 @@ class CounselorNode:
         self.port = local_info.get('port')
         self.node_id = local_info.get('name')
         self.config_ip = local_info.get('ip')  # O IP que outros pares usam para ME encontrar
-
+        node_dataset = local_info.get('training_dataset')  # Dataset específico deste nó
         # O host de "bind" é 0.0.0.0 para escutar em todas as interfaces
         self.bind_host = '0.0.0.0'
 
@@ -42,7 +42,7 @@ class CounselorNode:
         print(f"Logger inicializado. Logs serão salvos na raiz do projeto.")
 
         # Componente 2: Motor ML (Inteligência IDS)
-        self.engine = ClassifierEngine(self.peer_manager.get_ml_config())  # Inicializa o treinamento DCS
+        self.engine = ClassifierEngine(self.peer_manager.get_ml_config(), node_dataset )  # Inicializa o treinamento DCS
 
         # Componente 3 & 4: Rede (Passa o logger e o peer_manager)
         self.client = CounselorClient(self.node_id, self.peer_manager, self.logger)
@@ -150,7 +150,7 @@ class CounselorNode:
 
             print(f"[{self.node_id.upper()}] (Conselheiro) Decisão final enviada: {decision}")
 
-        return decision
+            return decision
 
     def check_traffic_and_act(self, sample_data_array, ground_truth):
         """

@@ -6,21 +6,24 @@
     {
       "name": "conselheiro_1",
       "ip": "172.20.0.2",
-      "port": 5000
+      "port": 5000,
+      "training_dataset": "df_FDI.csv"
     },
     {
       "name": "conselheiro_2",
       "ip": "172.20.0.3",
-      "port": 5000
+      "port": 5000,
+      "training_dataset": "df_EvilTwin.csv"
     },
     {
       "name": "conselheiro_3",
       "ip": "172.20.0.4",
-      "port": 5000
+      "port": 5000,
+      "training_dataset": "df_Replay.csv"
     }
   ],
   "ml_config": {
-    "training_dataset_source": "Dataset_IDS_UAV.csv",
+    "target_dataset": "Dataset_IDS_UAV_2.csv",
     "n_samples": 569,
     "n_features": 31,
     "n_classes": 3,

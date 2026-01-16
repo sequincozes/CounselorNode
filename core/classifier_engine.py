@@ -32,8 +32,9 @@ class ClassifierEngine:
     It handles data loading, K-Means clustering, classifier training, and conflict detection.
     """
 
-    def __init__(self, ml_config):
+    def __init__(self, ml_config, node_dataset=None):
         self.config = ml_config
+        self.node_dataset = node_dataset
         self.n_clusters = self.config.get('clustering_n_clusters', 5)
         # Threshold is 5% (0.05) for F1-score equivalence
         self.f1_threshold = self.config.get('f1_threshold', 0.05)
@@ -41,22 +42,46 @@ class ClassifierEngine:
         self.scaler = None
         self.kmeans = None
         self.X_test = None
-        self.test_size = random.random() #test size alterado para Random para testes
+        self.test_size = 0.2 #test size alterado para Random para testes
 
         self._load_data()
         self._train_dcs_model()
 
+    def _load_custom_data(self,data_source):
+        try:
+            df = pd.read_csv(data_source)
+        except Exception as e:
+            print(f"ERROR: Could not read dataset from {data_source}. Error: {e}")
+            sys.exit(1)
 
+        # Verifica se existe uma coluna alvo
+        target_col = self.config.get('target_column', None)
+        if target_col is None:
+            print("WARNING: No 'target_column' specified in configuration. Assuming last column is the target.")
+            target_col = df.columns[-1]
+
+        if target_col not in df.columns:
+            print(f"ERROR: Target column '{target_col}' not found in dataset.")
+            sys.exit(1)
+
+        y = df[target_col].values
+        X = df.drop(columns=[target_col]).values
+
+        print(f"INFO: Dataset loaded from file. {X.shape[0]} samples, {X.shape[1]} features.")
+            # -------------------------------------
+        
+        return X, y
+         
     def _load_data(self):
         """
-        Loads the dataset based on the 'training_dataset_source' configuration.
-        If 'auto', uses the Breast Cancer dataset from sklearn.
-        If a path is provided, it should load data from that path.
+        Loads the dataset based on the 'target_dataset' configuration.
+        If 'auto' or train_source is None, uses the Breast Cancer dataset from sklearn.
+        If a path is provided, it should load training and test data from that path.
         """
-        data_source = self.config.get('training_dataset_source', 'auto')
-        X, y = None, None
+        train_source = self.node_dataset
+        test_source = self.config.get('target_dataset', None)
 
-        if data_source == 'auto':
+        if test_source == 'auto' or train_source is None:
             # Option 1: Use sklearn's load_breast_cancer dataset as the standard dataset
             print("INFO: 'auto' source detected. Loading standard Scikit-learn 'Breast Cancer' dataset...")
 
@@ -67,44 +92,33 @@ class ClassifierEngine:
             print(
                 f"INFO: Using fixed dataset parameters: {X.shape[0]} samples, {X.shape[1]} features, {np.unique(y).size} classes.")
 
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=self.test_size, random_state=42) 
+        
         else:
             # Opção para carregar um dataset externo
-            print(f"INFO: Loading data from specified source: {data_source}...")
+            print(f"INFO: Loading training data from specified source: {train_source}...")
+            X_train, y_train = self._load_custom_data(train_source)
 
-            try:
-                df = pd.read_csv(data_source)
-            except Exception as e:
-                print(f"ERROR: Could not read dataset from {data_source}. Error: {e}")
-                sys.exit(1)
-
-            # Verifica se existe uma coluna alvo
-            target_col = self.config.get('target_column', None)
-            if target_col is None:
-                print("WARNING: No 'target_column' specified in configuration. Assuming last column is the target.")
-                target_col = df.columns[-1]
-
-            if target_col not in df.columns:
-                print(f"ERROR: Target column '{target_col}' not found in dataset.")
-                sys.exit(1)
-
-            y = df[target_col].values
-            X = df.drop(columns=[target_col]).values
-
-            print(f"INFO: Dataset loaded from file. {X.shape[0]} samples, {X.shape[1]} features.")
-            # -------------------------------------
-
+            print(f"INFO: Loading test from specified source: {test_source}...")
+            X_test, y_test = self._load_custom_data(test_source)
 
         # Check if data was loaded successfully
-        if X is None or y is None:
-            print("ERROR: Data could not be loaded or generated.")
+        if X_train is None or y_train is None:
+            print("ERROR: Train Data could not be loaded or generated.")
             sys.exit(1)
 
-        # Split and Standardize data (common to both options)
-        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(X, y, test_size=self.test_size, random_state=42) 
+        if X_test is None or y_test is None:
+            print("ERROR: Test Data could not be loaded or generated.")
+            sys.exit(1)
+
 
         self.scaler = StandardScaler()
-        self.X_train = self.scaler.fit_transform(self.X_train)
-        self.X_test = self.scaler.transform(self.X_test)
+
+        self.X_train = self.scaler.fit_transform(X_train)
+        self.X_test = self.scaler.transform(X_test)
+
+        self.y_train = y_train
+        self.y_test = y_test
 
         print(f"DATASET: {self.X_train.shape[0]} samples for training.\n Test_size={self.test_size:.2f}")
 

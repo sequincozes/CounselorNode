@@ -1,4 +1,4 @@
-p_height,p_x_speed,p_y_speed,p_z_speed,p_pitch,p_roll,p_yaw,p_temperature,p_flight_time,p_battery,p_mp_distance_x,p_mp_distance_y,p_mp_distance_z,frame.len,wlan.duration,wlan.ra,wlan.ta,wlan.da,wlan.sa,wlan.bssid,wlan.frag,wlan.seq,wlan.fc.type,wlan.fc.subtype,data.len,label
+p_height,p_x_speed,p_y_speed,p_z_speed,p_pitch,p_roll,p_yaw,p_temperature,p_flight_time,p_battery,p_mp_distance_x,p_mp_distance_y,p_mp_distance_z,frame.len,wlan.duration,wlan.ra,wlan.ta,wlan.da,wlan.sa,wlan.bssid,wlan.frag,wlan.seq,wlan.fc.type,wlan.fc.subtype,data.len,class
 80,0,0,0,0,0,0,68.0,7,65,-15,-5,86,24,0,1,1,1,1,0,0,24,2,4,0,NORMAL
 80,0,0,0,0,0,0,68.0,7,65,-15,-5,86,24,0,1,1,1,1,0,0,26,2,4,0,NORMAL
 80,0,0,0,0,0,0,68.0,7,65,-15,-5,86,104,0,4,1,4,1,0,0,49,0,8,0,NORMAL
