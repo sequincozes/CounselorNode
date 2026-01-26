@@ -200,6 +200,9 @@ class CounselorNode:
                     f"[{self.node_id.upper()}] Ação: Conflito resolvido ou sem conselho externo definitivo. Usando decisão local padrão.")
         else:
             # Se não há conflito, usamos a decisão local
-            final_decision = "INTRUSION" if classification != '0' else "NORMAL"
+            final_decision = (
+                "NORMAL" if classification in ('0', 'NORMAL') else "INTRUSION"
+            )
+
             print(
                 f"[{self.node_id.upper()}] Classificação Local: Sem conflito detectado. Decisão Final: {final_decision}.")
