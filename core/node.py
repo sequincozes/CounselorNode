@@ -17,140 +17,144 @@ from core.classifier_engine import ClassifierEngine
 class CounselorNode:
     """A classe principal que representa o IDS (Detector) na Counselors Network."""
 
-    def learnWithConflict(self, sample, label):
-        sample.
-        self.X_train = np.vstack([self.X_train, sample])
-        self.engine._apply_clustering()
-        self.engine._train_dcs_model()
-        pass
+    def learn_with_advice(self, sample, label):
+        # Transforma o sample em linha de uma dimensão (1D), ao invés de matriz 2D
+        sample = sample.reshape(1, -1)
 
-    def __init__(self, detected_ip):
-        # Componente 1: Configuração (Inicializado com o IP detectado)
-        self.peer_manager = ConfigManager(detected_ip)
+        # Adiciona a nova amostra às features de treino
+        self.engine.X_train = np.vstack([self.engine.X_train, sample])
+        self.engine.y_train = np.append(self.engine.y_train, label)
+
+        #Re-executa os processos do motor de aprendizado
+        self.engine.rebuild()
+        print("O nó {self.node_id} aprendeu com a amostra {sample} de rótulo {label}.")
+
+    def __init__(self, detected_ip, local_port=None):
+        # 1. Configuração (Correto: Passando IP e Porta opcional)
+        self.peer_manager = ConfigManager(detected_ip, local_port=local_port)
         local_info = self.peer_manager.get_local_info()
 
-        # Informações lidas do config
-        self.port = local_info.get('port')
-        self.node_id = local_info.get('name')
-        self.config_ip = local_info.get('ip')  # O IP que outros pares usam para ME encontrar
-
-        # O host de "bind" é 0.0.0.0 para escutar em todas as interfaces
+        # 2. Informações lidas do config (Centralizado no peer_manager)
+        self.node_id = self.peer_manager.node_id
+        self.port = self.peer_manager.local_port
+        self.local_ip = detected_ip
+        self.config_ip = local_info.get('ip')
         self.bind_host = '0.0.0.0'
 
-        # Componente 1.5: Logger
+        # 3. Logger
         self.logger = CounselorLogger(self.node_id, use_log_folder=False)
-        print(f"Logger inicializado. Logs serão salvos na raiz do projeto.")
+        print(f"Logger inicializado para o nó: {self.node_id}")
 
-        # Componente 2: Motor ML (Inteligência IDS)
+        # 4. Motor ML
         ml_config = self.peer_manager.get_ml_config()
         self.engine = ClassifierEngine(ml_config)
 
-        # Componente 3 & 4: Rede
+        # 5. Cliente de Rede
         self.client = CounselorClient(self.node_id, self.peer_manager, self.logger)
 
-        # O servidor recebe o callback para a lógica de aconselhamento
+        # 6. Servidor de Rede (Usando a porta correta vinda do config)
         self.server = CounselorServer(
             self.bind_host,
             self.port,
             self.node_id,
-            self._execute_counseling_logic,  # <- CALLBACK
+            self._execute_counseling_logic,
             self.logger,
             self.peer_manager
         )
 
         print(f"--- {self.node_id.upper()} INICIADO ---")
-        print(f"Endereço: {self.config_ip}:{self.port}")
+        print(f"Endereço de Escuta: {self.bind_host}:{self.port}")
 
     def start(self):
         """Inicia o servidor e mantém o nó ativo."""
         self.server.start_listening()
 
-
     def _execute_counseling_logic(self, sample_data_array, requester_id=None, requester_ip=None,
                                   ground_truth="N/A_from_peer", requester_chain=None):
         """
         Função de callback executada quando este nó recebe um pedido de aconselhamento.
-        Implementa a lógica de conselho em cascata, evitando loops.
+        Implementa a lógica de conselho em cascata usando IP:PORTA para evitar loops.
         """
-        print(f"\n[{self.node_id.upper()}] (Conselheiro) Recebeu pedido de {requester_id}. Analisando amostra...")
+        # 1. Identificação única deste nó (IP:Porta) para a cadeia
+        local_info = self.peer_manager.get_local_info()
+        my_identity = f"{local_info.get('ip')}:{local_info.get('port')}"
 
-        # 1. Atualiza a cadeia de requisição (Adiciona o IP deste nó)
+        print(f"\n[{self.node_id.upper()}] (Conselheiro) Recebeu pedido de {requester_id} ({requester_ip}).")
+
+        # 2. Inicializa e atualiza a cadeia de requisição
         if requester_chain is None:
             requester_chain = []
 
-        local_ip = self.peer_manager.get_local_info().get('ip')
-        current_chain = requester_chain + [local_ip]
+        # Se o requester_ip e porta (de quem chamou) não estiverem na cadeia, poderiam ser adicionados,
+        # mas o padrão é adicionar a si mesmo antes de passar adiante.
+        current_chain = requester_chain + [my_identity]
 
         print(f"[{self.node_id.upper()}] (Conselheiro) Cadeia de requisição atual: {current_chain}")
 
-        # 2. Executa a lógica de conflito local
+        # 3. Executa a lógica de conflito local
         results = self.engine.classify_and_check_conflict(sample_data_array)
         conflict = results['conflict']
 
-        # 3. Verifica se HÁ conflito
+        # 4. Caso haja conflito interno no conselheiro, ele busca um terceiro nó
         if conflict:
             print(
-                f"[{self.node_id.upper()}] (Conselheiro) CONFLITO INTERNO detectado ao tentar aconselhar {requester_id}. Solicitando um segundo conselho...")
+                f"[{self.node_id.upper()}] (Conselheiro) CONFLITO INTERNO ao aconselhar {requester_id}. Buscando ajuda externa...")
 
-            # 4. Filtra pares: EXCLUI todos os IPs na cadeia de requisição
+            # 5. Filtra pares: EXCLUI nós que já estão na cadeia (comparando IP:Porta)
             all_peers = self.peer_manager.get_other_peers()
 
-            # Remove qualquer par cujo IP já está na cadeia
             peers_to_ask = [
                 p for p in all_peers
-                if p['ip'] not in current_chain
+                if f"{p['ip']}:{p['port']}" not in current_chain
             ]
 
-            # --- LÓGICA DE LOOP CLOSED (NOVO) ---
+            # LÓGICA DE LOOP CLOSED: Se não houver ninguém novo para perguntar
             if not peers_to_ask:
                 print(
-                    f"[{self.node_id.upper()}] (Conselheiro) ALERTA: Loop Fechado! Todos os pares já foram consultados na cadeia. Retornando LOOP_CLOSED.")
+                    f"[{self.node_id.upper()}] (Conselheiro) ALERTA: Loop Fechado! Todos os pares IP:Porta já consultados. Retornando LOOP_CLOSED.")
                 return "LOOP_CLOSED"
 
-            # 5. Pede conselho a um terceiro
+            # 6. Pede conselho ao próximo par disponível
             counsel_response = self.client.request_counsel(
                 sample_data_array,
                 peers_to_ask,
                 ground_truth,
-                current_chain  # Passa a cadeia atualizada
+                current_chain  # Passa a cadeia atualizada com este nó incluso
             )
 
-            # 6. Baseia a resposta final no segundo conselho
-            # Propaga o LOOP_CLOSED se o terceiro nó também o retornar
-            if counsel_response and counsel_response['decision'] in ['LOOP_CLOSED', 'ERROR_CONNECTION', 'ERROR_TIMEOUT',
-                                                                     'ERROR_CONNECTION_REFUSED']:
-                print(
-                    f"[{self.node_id.upper()}] (Conselheiro) O último peer reportou falha/LOOP_CLOSED. Propagando alerta.")
-                return "LOOP_CLOSED"  # Resposta final para o solicitante original (A)
+            # 7. Trata a resposta do terceiro nó
+            if counsel_response:
+                decision = counsel_response.get('decision')
 
-            if counsel_response and counsel_response['decision'] == 'INTRUSION':
-                print(
-                    f"[{self.node_id.upper()}] (Conselheiro) Segundo conselho ({counsel_response['counselor_id']}) confirmou INTRUSAO.")
-                return "INTRUSION"  # Resposta final para o solicitante original (A)
-            else:
-                decision_txt = counsel_response['decision'] if counsel_response else "NENHUM"
-                print(
-                    f"[{self.node_id.upper()}] (Conselheiro) Segundo conselho foi {decision_txt}. Respondendo NORMAL como default.")
-                return "NORMAL"  # Resposta final para o solicitante original (A)
+                # Se o próximo nó falhou ou também detectou loop, propagamos o LOOP_CLOSED
+                if decision in ['LOOP_CLOSED', 'ERROR_CONNECTION', 'ERROR_TIMEOUT', 'ERROR_CONNECTION_REFUSED']:
+                    print(
+                        f"[{self.node_id.upper()}] (Conselheiro) Próximo peer reportou falha/loop. Propagando LOOP_CLOSED.")
+                    return "LOOP_CLOSED"
 
-        # 3b. Se NÃO HÁ conflito local (Decisão de alta confiança)
+                if decision == 'INTRUSION':
+                    print(f"[{self.node_id.upper()}] (Conselheiro) Segundo conselho confirmou INTRUSAO.")
+                    return "INTRUSION"
+
+                print(f"[{self.node_id.upper()}] (Conselheiro) Segundo conselho decidiu por NORMAL.")
+                return "NORMAL"
+
+            return "LOOP_CLOSED"  # Fallback se não houver resposta
+
+        # 8. Se NÃO HÁ conflito local (Decisão de alta confiança do conselheiro)
         else:
             classification = results['classification']
             print(f"[{self.node_id.upper()}] (Conselheiro) Análise local sem conflito. Decisão: {classification}.")
 
-            # Retorna a classificação local (0, 1, 2) mapeada para "NORMAL" ou "INTRUSION"
-            if classification == 'NORMAL':  # Assumindo que '0' é NORMAL
-                return "NORMAL"
-            else:
-                # Retorna a classe específica (ex: '1') que será mapeada para INTRUSION pelo Servidor
-                return classification
-
+            # Mapeamento simples: se o motor retornou 'NORMAL', enviamos 'NORMAL', caso contrário 'INTRUSION'
+            # Nota: Você pode retornar a classe específica (ex: 'DoS') se o seu servidor tratar isso.
+            return "NORMAL" if classification == 'NORMAL' else "INTRUSION"
     def check_traffic_and_act(self, sample_data_array, ground_truth):
         """
         Processa uma amostra de tráfego local e verifica por conflito.
         Inicia a cadeia de requisição se um conflito for detectado.
         """
-        print(f"\n[{self.node_id.upper()}] Analisando amostra (primeiras 5 features): {sample_data_array[:5]}...")
+        # print(f"\n[{self.node_id.upper()}] Analisando amostra (primeiras 25 features): {sample_data_array[:25]}...")
         print(f"[{self.node_id.upper()}] (Ground Truth para esta amostra: {ground_truth})")
 
         # 1. Classifica e verifica por conflito usando o motor DCS
@@ -220,7 +224,7 @@ class CounselorNode:
                 print(
                     f"[{self.node_id.upper()}] Ação: Conflito resolvido ou sem conselho externo definitivo. Usando decisão final: {final_decision}.")
 
-            learnWithConflict(sample_data_array, final_decision)
+            self.learn_with_advice(sample_data_array, final_decision)
             return final_decision
 
         else:

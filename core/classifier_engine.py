@@ -1,5 +1,6 @@
+import os
+
 import numpy as np
-import json
 from sklearn.cluster import KMeans
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score
@@ -12,7 +13,6 @@ from sklearn.svm import SVC
 import warnings
 import sys
 import pandas as pd
-import os
 
 # Suppress sklearn warnings for cleaner output
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -49,7 +49,9 @@ class ClassifierEngine:
 
     def _load_data(self):
         """Loads and preprocesses the training data based on configuration."""
-        data_source = self.config.get('training_dataset_source', 'auto')
+        filename = self.config.get('training_dataset_source', 'auto')
+        base_path = os.path.dirname(os.path.abspath(__file__))
+        data_source = os.path.join(base_path, '..', filename)
         print(f"[ENGINE] Loading data source: {data_source}")
 
         if data_source == 'auto':
@@ -87,8 +89,8 @@ class ClassifierEngine:
             print("ERROR: Data could not be loaded or generated.")
             sys.exit(1)
 
-            # Split and Standardize data (common to both options)
-        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+        # Split and Standardize data (common to both options)
+        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(X, y, test_size=0.9, random_state=42)
 
         self.scaler = StandardScaler()
         self.X_train = self.scaler.fit_transform(self.X_train)
@@ -284,3 +286,7 @@ class ClassifierEngine:
 
         # Retorna a classe (ex: '0', '1', '2'...) para ser mapeada no node.py
         return str(final_prediction)
+
+    def rebuild(self):
+        self._apply_clustering()
+        self._train_dcs_model()

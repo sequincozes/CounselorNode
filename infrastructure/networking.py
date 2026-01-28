@@ -175,29 +175,43 @@ class CounselorClient:
         self.node_id = node_id
         self.peer_manager = peer_manager
         self.logger = logger
-        self.local_ip = self.peer_manager.get_local_info().get('ip', 'N/A')
 
-    def request_counsel(self, sample_data_array, other_peers_list, ground_truth, requester_chain=None):
+        # BUSCA INFO LOCAL COMPLETA (IP e PORTA)
+        local_info = self.peer_manager.get_local_info()
+        self.local_ip = local_info.get('ip', '127.0.0.1')
+        self.local_port = local_info.get('port')
+
+    def request_counsel(self, sample_data_array, all_peers_list, ground_truth, requester_chain=None):
         """
-        Seleciona um par aleatório, envia um pedido de aconselhamento e LOGA o evento.
-        A 'requester_chain' é a lista de IPs que já participaram da cadeia de requisição.
+        Filtra a lista para remover a si mesmo (IP + Porta) e seleciona um par.
         """
         print("\n--- PEDINDO ACONSELHAMENTO P2P ---")
 
-        if not other_peers_list:
-            print("[CLIENTE] Nenhum outro par disponível para pedir conselho.")
+        # FILTRO INTELIGENTE: Essencial para rodar múltiplos nós no mesmo IP (127.0.0.1)
+        other_peers = [
+            p for p in all_peers_list
+            if not (p['ip'] == self.local_ip and p['port'] == self.local_port)
+        ]
+
+        if not other_peers:
+            print(f"[{self.node_id}] Alerta: Nenhum outro par disponível (Filtro resultou em lista vazia).")
+            # Debug para entender quem estava na lista
+            print(f"DEBUG: Eu sou {self.local_ip}:{self.local_port}. Lista total tinha {len(all_peers_list)} peers.")
             return None
 
-        # Seleciona um conselheiro aleatório
-        # O numpy.random.randint foi trocado por random.choice para evitar numpy como dependência de 'random'
+        # 1. FIXANDO SEED PARA REPRODUTIBILIDADE
         import random
-        target_peer = random.choice(other_peers_list)
+        # Usamos um seed fixo para garantir que o simulador escolha sempre o mesmo par no teste
+        random.seed(42)
+        target_peer = random.choice(other_peers)
+
         peer_ip = target_peer['ip']
         peer_port = target_peer['port']
         peer_name = target_peer['name']
 
         print(f"[CLIENTE] Conselheiro Selecionado: {peer_name} ({peer_ip}:{peer_port})")
 
+        # --- PREPARAÇÃO DOS DADOS ---
         if requester_chain is None:
             requester_chain = []
 
@@ -208,10 +222,11 @@ class CounselorClient:
             "reason": "Conflito de classificador local",
             "amostra": sample_data_str,
             "ground_truth": str(ground_truth),
-            "requester_chain": requester_chain  # NOVO: Envia a cadeia de requisição
+            "requester_chain": requester_chain
         }
         request_message = json.dumps(request_data).encode('utf-8')
 
+        # --- COMUNICAÇÃO SOCKET ---
         start_time = time.time()
         response = None
         log_decision = "ERROR_CONNECTION"
@@ -223,7 +238,6 @@ class CounselorClient:
             client_socket.connect((peer_ip, peer_port))
             client_socket.sendall(request_message)
 
-            # Recebe a resposta
             response_data = client_socket.recv(BUFFER_SIZE).decode('utf-8')
             response = json.loads(response_data)
             log_decision = response.get('decision', 'ERROR_RESPONSE')
@@ -232,14 +246,8 @@ class CounselorClient:
             print(f"Decisão do Conselheiro ({response['counselor_id']}): {log_decision}")
             print("--------------------------")
 
-        except socket.timeout:
-            print(f"[CLIENTE] Erro: Timeout tentando comunicar com {peer_ip}:{peer_port}")
-            log_decision = "ERROR_TIMEOUT"
-        except ConnectionRefusedError:
-            print(f"[CLIENTE] Erro: Conexão recusada. Conselheiro não está ativo.")
-            log_decision = "ERROR_CONNECTION_REFUSED"
         except Exception as e:
-            print(f"[CLIENTE] Erro na comunicação P2P: {e}")
+            print(f"[CLIENTE] Erro na comunicação P2P com {peer_name}: {e}")
             log_decision = f"ERROR: {type(e).__name__}"
         finally:
             if client_socket:
@@ -258,6 +266,6 @@ class CounselorClient:
                 decisao=log_decision,
                 ground_truth=ground_truth
             )
-            # ---------------
 
         return response
+

@@ -2,22 +2,10 @@
   "network_config": {
     "description": "Configuração geral da rede de conselheiros."
   },
-  "counselor_peers": [
-    {
-      "name": "conselheiro_1",
-      "ip": "192.168.137.133",
-      "port": 5000
-    },
-    {
-      "name": "conselheiro_2",
-      "ip": "192.168.137.92",
-      "port": 5000
-    },
-    {
-      "name": "conselheiro_3",
-      "ip": "192.168.137.95",
-      "port": 5000
-    }
+ "counselor_peers": [
+    { "name": "no_1", "ip": "127.0.0.1", "port": 5000 },
+    { "name": "no_2", "ip": "127.0.0.1", "port": 5001 },
+    { "name": "no_3", "ip": "127.0.0.1", "port": 5002 }
   ],
   "ml_config": {
     "training_dataset_source": "Dataset_IDS_UAV.csv",
