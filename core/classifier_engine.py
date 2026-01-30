@@ -1,292 +1,478 @@
+# classifier_engine.py
 import os
+import sys
+import warnings
 
 import numpy as np
+import pandas as pd
+
 from sklearn.cluster import KMeans
-from sklearn.model_selection import train_test_split
+from sklearn.datasets import load_breast_cancer
 from sklearn.metrics import f1_score
-from sklearn.datasets import make_classification, load_breast_cancer
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.naive_bayes import GaussianNB
 from sklearn.svm import SVC
-import warnings
-import sys
-import pandas as pd
 
-# Suppress sklearn warnings for cleaner output
+
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-# Maps string names to Scikit-learn classifier classes
 CLASSIFIER_MAP = {
-    'DecisionTreeClassifier': DecisionTreeClassifier,
-    'KNeighborsClassifier': KNeighborsClassifier,
-    'GaussianNB': GaussianNB,
-    'SVC': SVC
+    "DecisionTreeClassifier": DecisionTreeClassifier,
+    "KNeighborsClassifier": KNeighborsClassifier,
+    "GaussianNB": GaussianNB,
+    "SVC": SVC,
 }
 
 
 class ClassifierEngine:
     """
-    Manages the Dynamic Classifier Selection (DCS) mechanism for a single Counselor Node.
-    It handles data loading, K-Means clustering, classifier training, and conflict detection.
+    MODELOS GLOBAIS + AVALIAÇÃO POR CLUSTER + DETECÇÃO DE OUTLIER (OOD) POR DISTÂNCIA AO CENTRÓIDE
+
+    IMPORTANTE (FIX):
+      - X_final_test deve ficar RAW (não escalado) para evitar double-scaling
+        quando o simulador pega engine.X_final_test[idx] e depois chama classify_and_check_conflict().
     """
 
     def __init__(self, ml_config):
         self.config = ml_config
-        self.n_clusters = self.config.get('clustering_n_clusters', 5)
-        # Threshold is 5% (0.05) for F1-score equivalence
-        self.f1_threshold = self.config.get('f1_threshold', 0.15)
-        self.cluster_classifiers = {}  # {cluster_id: {'best_models': [model1, model2], 'max_f1': 0.95}}
+
+        # Parâmetros
+        self.n_clusters = int(self.config.get("clustering_n_clusters", 5))
+        self.f1_threshold = float(self.config.get("f1_threshold", 0.05))
+        self.f1_min_required = float(self.config.get("f1_min_required", 0.80))  # 0..1
+
+        self.random_state = int(self.config.get("random_state", 42))
+        self.use_stratify = bool(self.config.get("stratify", True))
+
+        self.eval_size = float(self.config.get("eval_size", 0.30))
+        self.min_cluster_eval_samples = int(self.config.get("min_cluster_eval_samples", 10))
+
+        self.outlier_enabled = bool(self.config.get("outlier_enabled", True))
+        self.outlier_percentile = float(self.config.get("outlier_percentile", 97.0))
+
+        self.train_eval_source = self.config.get(
+            "train_eval_dataset_source",
+            self.config.get("training_dataset_source", "auto"),
+        )
+        self.final_test_source = self.config.get("final_test_dataset_source", None)
+        self.target_column = self.config.get("target_column", None)
+
+        # Estruturas
         self.scaler = None
         self.kmeans = None
-        self.X_test = None
-        self.y_test = None
 
-        self._load_data()
-        self._apply_clustering()
-        self._train_dcs_model()
+        self.X_train = None
+        self.y_train = None
+        self.X_eval = None
+        self.y_eval = None
 
-    def _load_data(self):
-        """Loads and preprocesses the training data based on configuration."""
-        filename = self.config.get('training_dataset_source', 'auto')
+        # TEST final RAW (FIX)
+        self.X_final_test = None          # RAW (mantido por compatibilidade)
+        self.X_final_test_scaled = None   # opcional
+        self.y_final_test = None
+
+        self.clusters_train = None
+        self.clusters_eval = None
+
+        self.global_models = {}
+        self.cluster_classifiers = {}
+
+        self.cluster_outlier_thresholds = {}
+        self.cluster_outlier_stats = {}
+
+        # Build
+        self._load_train_eval_data()
+        self._fit_scaler_and_cluster()
+        self._fit_outlier_thresholds_from_train()
+        self._train_global_models()
+        self._select_committee_per_cluster()
+        self._load_final_test_data()
+
+    # -------------------------
+    # Helpers
+    # -------------------------
+    def _resolve_path(self, filename):
+        if filename == "auto":
+            return "auto"
         base_path = os.path.dirname(os.path.abspath(__file__))
-        data_source = os.path.join(base_path, '..', filename)
-        print(f"[ENGINE] Loading data source: {data_source}")
+        return os.path.join(base_path, "..", filename)
 
-        if data_source == 'auto':
+    def _load_csv(self, filepath):
+        try:
+            df = pd.read_csv(filepath)
+        except Exception as e:
+            print(f"[ENGINE] ERROR: Could not read dataset from {filepath}. Error: {e}")
+            sys.exit(1)
+
+        target_col = self.target_column
+        if target_col is None:
+            print("[ENGINE] WARNING: No 'target_column' specified. Assuming last column is the target.")
+            target_col = df.columns[-1]
+
+        if target_col not in df.columns:
+            print(f"[ENGINE] ERROR: Target column '{target_col}' not found in dataset.")
+            sys.exit(1)
+
+        y = df[target_col].values
+        X_df = df.drop(columns=[target_col])
+
+        # garante numérico
+        X_df = X_df.apply(pd.to_numeric, errors="coerce").fillna(0.0)
+        X = X_df.values
+
+        return X, y
+
+    def _safe_train_test_split(self, X, y, test_size):
+        """Split com stratify quando possível; fallback sem stratify se dataset tiver classes raras."""
+        strat = y if (self.use_stratify and len(np.unique(y)) > 1) else None
+        try:
+            return train_test_split(
+                X, y,
+                test_size=test_size,
+                random_state=self.random_state,
+                stratify=strat
+            )
+        except ValueError as e:
+            # comum quando existe classe com 1 amostra
+            print(f"[ENGINE] WARNING: stratify split failed ({e}). Falling back to non-stratified split.")
+            return train_test_split(
+                X, y,
+                test_size=test_size,
+                random_state=self.random_state,
+                stratify=None
+            )
+
+    # -------------------------
+    # 1) CSV A -> TRAIN/EVAL
+    # -------------------------
+    def _load_train_eval_data(self):
+        src = self._resolve_path(self.train_eval_source)
+        print(f"[ENGINE] Loading TRAIN+EVAL source: {src}")
+
+        if src == "auto":
             data = load_breast_cancer()
             X = data.data
             y = data.target
         else:
-            # Opção para carregar um dataset externo
-            print(f"INFO: Loading data from specified source: {data_source}...")
+            print(f"[ENGINE] INFO: Loading TRAIN+EVAL data from: {src}")
+            X, y = self._load_csv(src)
+            print(f"[ENGINE] INFO: TRAIN+EVAL loaded. {X.shape[0]} samples, {X.shape[1]} features.")
 
-            try:
-                df = pd.read_csv(data_source)
-            except Exception as e:
-                print(f"ERROR: Could not read dataset from {data_source}. Error: {e}")
-                sys.exit(1)
+        X_train, X_eval, y_train, y_eval = self._safe_train_test_split(X, y, test_size=self.eval_size)
 
-            # Verifica se existe uma coluna alvo
-            target_col = self.config.get('target_column', None)
-            if target_col is None:
-                print("WARNING: No 'target_column' specified in configuration. Assuming last column is the target.")
-                target_col = df.columns[-1]
+        self.X_train = X_train
+        self.y_train = y_train
+        self.X_eval = X_eval
+        self.y_eval = y_eval
 
-            if target_col not in df.columns:
-                print(f"ERROR: Target column '{target_col}' not found in dataset.")
-                sys.exit(1)
+        print(f"[ENGINE] SPLIT A: TRAIN={self.X_train.shape[0]} | EVAL={self.X_eval.shape[0]}")
 
-            y = df[target_col].values
-            X = df.drop(columns=[target_col]).values
-
-            print(f"INFO: Dataset loaded from file. {X.shape[0]} samples, {X.shape[1]} features.")
-            # -------------------------------------
-
-            # Check if data was loaded successfully
-        if X is None or y is None:
-            print("ERROR: Data could not be loaded or generated.")
-            sys.exit(1)
-
-        # Split and Standardize data (common to both options)
-        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(X, y, test_size=0.9, random_state=42)
-
+    # -------------------------
+    # 2) scaler + kmeans no TRAIN
+    # -------------------------
+    def _fit_scaler_and_cluster(self):
         self.scaler = StandardScaler()
         self.X_train = self.scaler.fit_transform(self.X_train)
-        self.X_test = self.scaler.transform(self.X_test)
+        self.X_eval = self.scaler.transform(self.X_eval)
 
-        print(f"DATASET: {self.X_train.shape[0]} samples for training.")
-        # else:
-        #     try:
-        #         df = pd.read_csv(source)
-        #
-        #         # Assume a coluna alvo é a última ('Label' ou 'Class')
-        #         X = df.iloc[:, :-1].values
-        #         y = df.iloc[:, -1].values
-        #
-        #     except (FileNotFoundError, IndexError, Exception) as e:
-        #         print(f"ERRO: Falha ao carregar o dataset '{source}'. Usando fallback: {e}")
-        #         data = make_classification(n_samples=500, n_features=20, n_informative=15, n_redundant=0, n_classes=3,
-        #                                    n_clusters_per_class=1, random_state=42)
-        #         X = data[0]
-        #         y = data[1]
-        #
-        # # Train-test split (70% for training the DCS models, 30% for final test)
-        # X_train, self.X_test, y_train, self.y_test = train_test_split(
-        #     X, y, test_size=0.97, random_state=42, stratify=y
-        # )
-        #
-        # self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(X, y, test_size=0.7, random_state=42)
-        #
-        # # Standard Scaler (CRUCIAL for distance-based algorithms like KNN/SVC)
-        # self.scaler = StandardScaler()
-        # self.X_train_scaled = self.scaler.fit_transform(X_train)
-        # self.y_train = y_train
-        #
-        # print(f"[ENGINE] Data loaded: {self.X_train_scaled.shape[0]} samples for training.")
+        print(f"[ENGINE] Fitting K-Means on TRAIN (K={self.n_clusters})...")
+        self.kmeans = KMeans(n_clusters=self.n_clusters, random_state=self.random_state, n_init="auto")
+        self.kmeans.fit(self.X_train)
 
-    def _apply_clustering(self):
-        """Applies K-Means clustering to the training data."""
-        print(f"[ENGINE] Applying K-Means clustering (K={self.n_clusters})...")
+        self.clusters_train = self.kmeans.predict(self.X_train)
+        self.clusters_eval = self.kmeans.predict(self.X_eval)
+
+        print("[ENGINE] K-Means fit complete. Clusters assigned for TRAIN and EVAL.")
+
+    # -------------------------
+    # OUTLIER thresholds no TRAIN
+    # -------------------------
+    def _fit_outlier_thresholds_from_train(self):
+        self.cluster_outlier_thresholds = {}
+        self.cluster_outlier_stats = {}
+
+        if not self.outlier_enabled:
+            for c in range(self.n_clusters):
+                self.cluster_outlier_thresholds[c] = float("inf")
+            print("[ENGINE] Outlier detection disabled.")
+            return
+
+        centers = self.kmeans.cluster_centers_
+        p = float(self.outlier_percentile)
+
+        for c in range(self.n_clusters):
+            idx = np.where(self.clusters_train == c)[0]
+            if len(idx) == 0:
+                self.cluster_outlier_thresholds[c] = float("inf")
+                self.cluster_outlier_stats[c] = {"p": p, "mean": 0.0, "std": 0.0, "max": 0.0, "n": 0}
+                continue
+
+            Xc = self.X_train[idx]
+            centroid = centers[c]
+            dists = np.linalg.norm(Xc - centroid, axis=1)
+
+            thr = float(np.percentile(dists, p))
+            self.cluster_outlier_thresholds[c] = thr
+            self.cluster_outlier_stats[c] = {
+                "p": p,
+                "mean": float(np.mean(dists)),
+                "std": float(np.std(dists)),
+                "max": float(np.max(dists)),
+                "n": int(len(dists)),
+            }
+
+        print(f"[ENGINE] Outlier thresholds fit from TRAIN using percentile p={p:.1f}.")
+
+    # -------------------------
+    # Instanciar classificador
+    # -------------------------
+    def _instantiate_classifier(self, name: str):
+        cls = CLASSIFIER_MAP.get(name)
+        if not cls:
+            return None
         try:
-            self.kmeans = KMeans(n_clusters=self.n_clusters, random_state=42, n_init='auto')
-            self.kmeans.fit(self.X_train)
-            self.clusters = self.kmeans.predict(self.X_train)
-            print("[ENGINE] K-Means clustering complete.")
-        except ValueError as e:
-            print(f"[ENGINE] ERRO ao aplicar K-Means. Verifique os dados: {e}")
+            if name in ["GaussianNB", "KNeighborsClassifier"]:
+                return cls()
+            return cls(random_state=self.random_state)
+        except TypeError:
+            try:
+                return cls()
+            except Exception:
+                return None
+
+    # -------------------------
+    # 3) Modelos globais no TRAIN
+    # -------------------------
+    def _train_global_models(self):
+        self.global_models = {}
+        print("[ENGINE] Training GLOBAL models on full TRAIN (excluding EVAL)...")
+
+        # se TRAIN ficou monoclasse, não tem como treinar alguns modelos
+        n_classes = len(np.unique(self.y_train))
+        if n_classes < 2:
+            print(f"[ENGINE] ERROR: TRAIN has only 1 class (n_classes={n_classes}). Check your dataset split/filter.")
+            # você pode sys.exit(1) se preferir abortar
+            # sys.exit(1)
+
+        for name in self.config.get("classifiers", []):
+            model = self._instantiate_classifier(name)
+            if model is None:
+                continue
+            try:
+                # alguns modelos quebram com 1 classe
+                if len(np.unique(self.y_train)) < 2:
+                    print(f"[ENGINE] WARN: Skipping {name} because TRAIN has 1 class.")
+                    continue
+
+                model.fit(self.X_train, self.y_train)
+                self.global_models[name] = model
+                print(f"[ENGINE] GLOBAL model trained: {name}")
+            except Exception as e:
+                print(f"[ENGINE] WARN: Failed to train GLOBAL model {name}: {repr(e)}")
+
+        if not self.global_models:
+            print("[ENGINE] ERROR: No global models could be trained. Check classifiers config / data.")
             sys.exit(1)
 
-    def _train_and_evaluate(self, cluster_data, cluster_labels):
-        """Trains and evaluates all configured classifiers on a specific cluster's data."""
-        best_f1 = -1
-        models_f1 = []
-
-        for name in self.config.get('classifiers', []):
-            ClassifierClass = CLASSIFIER_MAP.get(name)
-            if not ClassifierClass:
-                continue
-
-            try:
-                model = ClassifierClass(random_state=42) if name not in ['GaussianNB',
-                                                                         'KNeighborsClassifier'] else ClassifierClass()
-                model.fit(cluster_data, cluster_labels)
-
-                # Use a pequena porção de teste do próprio cluster para a pontuação F1
-                # Nota: Idealmente, usaríamos um conjunto de validação separado, mas para DCS básico, isso serve.
-                predictions = model.predict(cluster_data)
-
-                # Weighted F1-Score é bom para classes desbalanceadas (comum em IDS)
-                f1 = f1_score(cluster_labels, predictions, average='weighted', zero_division=0)
-
-                models_f1.append({
-                    'name': name,
-                    'model': model,
-                    'f1': f1
-                })
-
-                if f1 > best_f1:
-                    best_f1 = f1
-
-            except Exception as e:
-                # print(f"Warning: Falha ao treinar {name} no cluster: {e}")
-                continue
-
-        return models_f1, best_f1
-
-    def _train_dcs_model(self):
-        """
-        Trains the Dynamic Classifier Selection (DCS) mechanism.
-        Selects a committee of models for each cluster based on F1-score.
-        """
-        print("[ENGINE] Starting DCS model training...")
+    # -------------------------
+    # 4) Committee por cluster (EVAL)
+    # -------------------------
+    def _select_committee_per_cluster(self):
+        print("[ENGINE] Selecting committee per cluster using EVAL (global models)...")
+        self.cluster_classifiers = {}
 
         for cluster_id in range(self.n_clusters):
-            # Isolate data for the current cluster
-            cluster_indices = np.where(self.clusters == cluster_id)[0]
-            if len(cluster_indices) == 0:
-                print(f"Warning: Cluster {cluster_id} está vazio. Pulando.")
+            tr_idx = np.where(self.clusters_train == cluster_id)[0]
+            ev_idx = np.where(self.clusters_eval == cluster_id)[0]
+
+            X_ev_c = self.X_eval[ev_idx]
+            y_ev_c = self.y_eval[ev_idx]
+
+            if len(ev_idx) < self.min_cluster_eval_samples:
+                self.cluster_classifiers[cluster_id] = {
+                    "best_models": [],
+                    "max_f1": -1.0,
+                    "below_min_f1": True,
+                    "reason": f"EVAL_TOO_SMALL(n_eval={len(ev_idx)} < {self.min_cluster_eval_samples})",
+                    "n_train": int(len(tr_idx)),
+                    "n_eval": int(len(ev_idx)),
+                }
+                print(f"[ENGINE] Cluster {cluster_id}: NOT_TRUSTED | EVAL_TOO_SMALL | n_train={len(tr_idx)} n_eval={len(ev_idx)}")
                 continue
 
-            X_cluster = self.X_train[cluster_indices]
-            y_cluster = self.y_train[cluster_indices]
+            models_f1 = []
+            max_f1 = -1.0
 
-            # Train and evaluate all models on the cluster
-            models_f1, max_f1 = self._train_and_evaluate(X_cluster, y_cluster)
+            for name, model in self.global_models.items():
+                try:
+                    preds = model.predict(X_ev_c)
+                    f1 = f1_score(y_ev_c, preds, average="weighted", zero_division=0)
+                    models_f1.append({"name": name, "model": model, "f1": float(f1)})
+                    if f1 > max_f1:
+                        max_f1 = float(f1)
+                except Exception as e:
+                    print(f"[ENGINE] WARN: eval failed for {name} on cluster {cluster_id}: {repr(e)}")
 
-            # Select models whose F1 is close to the max F1 (within the threshold)
-            best_models = [
-                m for m in models_f1
-                if m['f1'] >= (max_f1 - self.f1_threshold)
-            ]
-
-            if best_models:
+            if not models_f1 or max_f1 < 0:
                 self.cluster_classifiers[cluster_id] = {
-                    'best_models': best_models,
-                    'max_f1': max_f1
+                    "best_models": [],
+                    "max_f1": float(max_f1),
+                    "below_min_f1": True,
+                    "reason": "NO_MODEL_EVALUATED",
+                    "n_train": int(len(tr_idx)),
+                    "n_eval": int(len(ev_idx)),
                 }
-                # print(f"Cluster {cluster_id}: {len(best_models)} models selected. Max F1: {max_f1:.4f}")
+                print(f"[ENGINE] Cluster {cluster_id}: NO_MODEL_EVALUATED | n_train={len(tr_idx)} n_eval={len(ev_idx)}")
+                continue
+
+            below_min = (max_f1 < self.f1_min_required)
+
+            cutoff = max_f1 - self.f1_threshold
+            selected = [m for m in models_f1 if m["f1"] >= cutoff]
+
+            if not selected:
+                below_min = True
+                reason_final = "NO_SELECTED_MODELS"
             else:
-                print(f"Cluster {cluster_id}: Nenhum modelo selecionado (max_f1: {max_f1:.4f}).")
+                reason_final = "OK" if not below_min else "MAX_F1_BELOW_MIN"
 
-        print("[ENGINE] DCS training complete.")
+            self.cluster_classifiers[cluster_id] = {
+                "best_models": selected,
+                "max_f1": float(max_f1),
+                "below_min_f1": bool(below_min),
+                "reason": reason_final,
+                "n_train": int(len(tr_idx)),
+                "n_eval": int(len(ev_idx)),
+            }
 
+            print(
+                f"[ENGINE] Cluster {cluster_id}: "
+                f"n_train={len(tr_idx)} n_eval={len(ev_idx)} | "
+                f"max_f1(eval)={max_f1:.4f} | selected={len(selected)} | below_min={below_min}"
+            )
+
+        print("[ENGINE] Committee selection complete.")
+
+    # -------------------------
+    # 5) CSV B -> teste final (RAW!)
+    # -------------------------
+    def _load_final_test_data(self):
+        if not self.final_test_source:
+            print("[ENGINE] Final test source not provided. Skipping CSV B.")
+            return
+
+        src = self._resolve_path(self.final_test_source)
+        print(f"[ENGINE] Loading FINAL TEST source (CSV B): {src}")
+
+        if src == "auto":
+            data = load_breast_cancer()
+            X = data.data
+            y = data.target
+        else:
+            X, y = self._load_csv(src)
+            print(f"[ENGINE] INFO: FINAL TEST loaded. {X.shape[0]} samples, {X.shape[1]} features.")
+
+        if X.shape[1] != self.X_train.shape[1]:
+            print(f"[ENGINE] ERROR: FINAL TEST has {X.shape[1]} features, TRAIN has {self.X_train.shape[1]}.")
+            sys.exit(1)
+
+        # FIX: manter RAW para não dar double-scaling no simulador
+        self.X_final_test = X
+        self.y_final_test = y
+
+        # se você quiser usar internamente, mantém versão escalada também
+        self.X_final_test_scaled = self.scaler.transform(X)
+
+        print(f"[ENGINE] FINAL TEST ready: {self.X_final_test.shape[0]} samples.")
+
+    # -------------------------
+    # Inferência + OOD
+    # -------------------------
     def classify_and_check_conflict(self, sample_data):
-        """
-        Classifies a single sample using the DCS committee for its cluster
-        and checks if the committee decision is unanimous (no conflict).
-        """
-        # 1. Scale the sample and predict the cluster
-        sample_scaled = self.scaler.transform(sample_data.reshape(1, -1))
-
-        if self.kmeans is None:
+        if self.scaler is None or self.kmeans is None:
             return {"classification": "UNKNOWN", "conflict": True, "decisions": ["Engine not ready"], "cluster_id": -1}
 
-        cluster_id = self.kmeans.predict(sample_scaled)[0]
-
-        if cluster_id not in self.cluster_classifiers:
-            # Não há classificadores treinados para este cluster
-            return {"classification": "UNKNOWN", "conflict": True, "decisions": ["Cluster not mapped"],
-                    "cluster_id": int(cluster_id)}
-
-        dcs_data = self.cluster_classifiers[cluster_id]
-
-        # 2. Classify with all selected models and record decisions
-        decisions = []
-        for classifier_info in dcs_data['best_models']:
-            prediction = classifier_info['model'].predict(sample_scaled)[0]
-            decisions.append(str(prediction))
-
-        # 3. Check for conflict (more than one unique decision)
-        unique_decisions = np.unique(decisions)
-        conflict = len(unique_decisions) > 1
-
-        if conflict:
-            final_class = "CONFLICT_DETECTED"
-        else:
-            # Takes the majority/unique decision
-            final_class = unique_decisions[0] if len(unique_decisions) > 0 else "UNKNOWN"
-
-        return {
-            "classification": final_class,
-            "conflict": conflict,
-            "decisions": decisions,
-            "cluster_id": int(cluster_id)
-        }
-
-    def counseling_logic(self, sample_data):
-        """
-        Lógica de classificação de alta confiança usada quando o nó atua como Conselheiro
-        ou quando é preciso dar uma resposta única (e.g., LOOP_CLOSED).
-        Utiliza o modelo com o MAIOR F1-Score ABSOLUTO no cluster para dar um voto único.
-        """
-        # 1. Preprocessa e encontra o cluster
+        # assume sample_data RAW (FIX)
         sample_scaled = self.scaler.transform(sample_data.reshape(1, -1))
-        if self.kmeans is None:
-            return "UNKNOWN"  # Retorna UNKNOWN se o motor não estiver pronto
+        cluster_id = int(self.kmeans.predict(sample_scaled)[0])
 
-        cluster_id = self.kmeans.predict(sample_scaled)[0]
+        if self.outlier_enabled:
+            centroid = self.kmeans.cluster_centers_[cluster_id]
+            dist = float(np.linalg.norm(sample_scaled[0] - centroid))
+            thr = float(self.cluster_outlier_thresholds.get(cluster_id, float("inf")))
+
+            if dist > thr:
+                return {
+                    "classification": "CONFLICT_DETECTED",
+                    "conflict": True,
+                    "decisions": [f"OOD_OUTLIER(dist={dist:.4f} > thr_p{self.outlier_percentile:.1f}={thr:.4f})"],
+                    "cluster_id": cluster_id,
+                }
 
         if cluster_id not in self.cluster_classifiers:
-            return "UNKNOWN"  # Retorna UNKNOWN se o cluster não estiver mapeado
+            return {"classification": "UNKNOWN", "conflict": True, "decisions": ["Cluster not mapped"], "cluster_id": cluster_id}
 
-        dcs_data = self.cluster_classifiers[cluster_id]
+        dcs = self.cluster_classifiers[cluster_id]
 
-        # 2. Encontra o modelo ABSOLUTAMENTE melhor (maior F1-Score) dentro do conjunto selecionado
+        if dcs.get("below_min_f1", False):
+            reason = dcs.get("reason", "UNTRUSTED_CLUSTER")
+            max_f1 = dcs.get("max_f1", -1.0)
+            return {
+                "classification": "CONFLICT_DETECTED",
+                "conflict": True,
+                "decisions": [f"UNTRUSTED_CLUSTER({reason})", f"min_f1={self.f1_min_required:.3f}", f"max_f1={max_f1:.3f}"],
+                "cluster_id": cluster_id,
+            }
 
-        # Encontra o modelo com maior F1-score absoluto no cluster
-        best_model_info = max(dcs_data['best_models'], key=lambda x: x['f1'], default=None)
+        models = dcs.get("best_models", [])
+        if not models:
+            return {"classification": "CONFLICT_DETECTED", "conflict": True, "decisions": ["No selected models"], "cluster_id": cluster_id}
 
-        if best_model_info is None:
+        decisions = []
+        for info in models:
+            try:
+                pred = info["model"].predict(sample_scaled)[0]
+                decisions.append(str(pred))
+            except Exception:
+                decisions.append("ERROR")
+
+        unique = np.unique(decisions)
+        conflict = len(unique) > 1
+        final_class = "CONFLICT_DETECTED" if conflict else (unique[0] if len(unique) else "UNKNOWN")
+
+        return {"classification": final_class, "conflict": bool(conflict), "decisions": decisions, "cluster_id": cluster_id}
+
+    # -------------------------
+    # Voto único (conselheiro)
+    # -------------------------
+    def counseling_logic(self, sample_data):
+        if self.scaler is None or self.kmeans is None:
             return "UNKNOWN"
 
-        # 3. Classifica usando apenas o modelo mais confiável
-        final_prediction = best_model_info['model'].predict(sample_scaled)[0]
+        sample_scaled = self.scaler.transform(sample_data.reshape(1, -1))
+        cluster_id = int(self.kmeans.predict(sample_scaled)[0])
 
-        # Retorna a classe (ex: '0', '1', '2'...) para ser mapeada no node.py
-        return str(final_prediction)
+        if cluster_id not in self.cluster_classifiers:
+            return "UNKNOWN"
 
-    def rebuild(self):
-        self._apply_clustering()
-        self._train_dcs_model()
+        dcs = self.cluster_classifiers[cluster_id]
+        if dcs.get("below_min_f1", False):
+            return "UNKNOWN"
+
+        models = dcs.get("best_models", [])
+        if not models:
+            return "UNKNOWN"
+
+        best = max(models, key=lambda x: x.get("f1", -1.0), default=None)
+        if best is None:
+            return "UNKNOWN"
+
+        try:
+            pred = best["model"].predict(sample_scaled)[0]
+            return str(pred)
+        except Exception:
+            return "UNKNOWN"

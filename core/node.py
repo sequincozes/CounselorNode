@@ -148,7 +148,7 @@ class CounselorNode:
 
             # Mapeamento simples: se o motor retornou 'NORMAL', enviamos 'NORMAL', caso contrário 'INTRUSION'
             # Nota: Você pode retornar a classe específica (ex: 'DoS') se o seu servidor tratar isso.
-            return "NORMAL" if classification == 'NORMAL' else "INTRUSION"
+            return "NORMAL" if classification == 'benign' else "INTRUSION"
     def check_traffic_and_act(self, sample_data_array, ground_truth):
         """
         Processa uma amostra de tráfego local e verifica por conflito.
@@ -185,7 +185,7 @@ class CounselorNode:
                     f"[{self.node_id.upper()}] Ação: Conflito detectado, mas não há outros pares. Usando decisão local padrão.")
                 # Retorna a decisão local de desempate
                 best_model_class = self.engine.counseling_logic(sample_data_array)
-                final_decision = "INTRUSION" if best_model_class != 'NORMAL' else "NORMAL"
+                final_decision = "INTRUSION" if best_model_class != 'benign' else "NORMAL"
                 return final_decision
 
             # O cliente seleciona um par aleatório da lista 'other_peers'
@@ -208,7 +208,7 @@ class CounselorNode:
 
                 # 3. Usa a lógica de alta confiança (melhor modelo) do ClassifierEngine para desempate
                 best_model_class = self.engine.counseling_logic(sample_data_array)
-                final_decision = "INTRUSION" if best_model_class != 'NORMAL' else "NORMAL"
+                final_decision = "INTRUSION" if best_model_class != 'benign' else "NORMAL"
 
                 print(
                     f"[{self.node_id.upper()}] WARNING: Decisão final: {final_decision} (Melhor Classificador Local). Classe: {best_model_class}")
@@ -229,7 +229,7 @@ class CounselorNode:
 
         else:
             # Se não há conflito, usamos a decisão local
-            final_decision = "INTRUSION" if classification != 'NORMAL' else "NORMAL"
+            final_decision = "INTRUSION" if classification != 'benign' else "NORMAL"
             print(
                 f"[{self.node_id.upper()}] Classificação Local: Sem conflito detectado. Decisão Final: {final_decision}.")
             return final_decision
