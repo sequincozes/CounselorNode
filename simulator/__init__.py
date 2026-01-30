@@ -1,3 +1,4 @@
+import socket
 import time
 import multiprocessing as mp
 import copy
@@ -59,6 +60,37 @@ def node_process(ip, port, ml_override=None):
         print(f"{Colors.FAIL}[ERRO] Falha crítica no nó {port}: {e}{Colors.ENDC}")
 
 
+def _pick_source(engine: ClassifierEngine, sample_source: str):
+    """
+    Retorna (X_src, y_src, src_name) priorizando SEMPRE os arrays RAW quando disponíveis.
+    Isso evita enviar amostras escaladas ao solicitar conselho (double scaling nos peers).
+    """
+    # helpers: pega RAW se existir, senão usa scaled
+    def raw_or_scaled(raw_attr, scaled_attr):
+        if hasattr(engine, raw_attr) and getattr(engine, raw_attr) is not None:
+            return getattr(engine, raw_attr), True
+        return getattr(engine, scaled_attr), False
+
+    if sample_source == "final_test" and getattr(engine, "X_final_test", None) is not None:
+        X_src, is_raw = raw_or_scaled("X_final_test_raw", "X_final_test")
+        y_src = engine.y_final_test
+        src_name = "FINAL_TEST(CSV B)" + (" [RAW]" if is_raw else " [SCALED/FALLBACK]")
+        return X_src, y_src, src_name
+
+    if sample_source == "eval":
+        # pode existir mesmo sem CSV B
+        X_src, is_raw = raw_or_scaled("X_eval_raw", "X_eval")
+        y_src = engine.y_eval
+        src_name = "EVAL(CSV A)" + (" [RAW]" if is_raw else " [SCALED/FALLBACK]")
+        return X_src, y_src, src_name
+
+    # default: train
+    X_src, is_raw = raw_or_scaled("X_train_raw", "X_train")
+    y_src = engine.y_train
+    src_name = "TRAIN(CSV A)" + (" [RAW]" if is_raw else " [SCALED/FALLBACK]")
+    return X_src, y_src, src_name
+
+
 def run_trigger(ip="127.0.0.1", port=5000, sample_index=0, ml_override=None, sample_source="final_test"):
     if ml_override:
         ML_OVERRIDES_BY_PORT[port] = ml_override
@@ -72,25 +104,15 @@ def run_trigger(ip="127.0.0.1", port=5000, sample_index=0, ml_override=None, sam
     engine = ClassifierEngine(ml_config)
     client = CounselorClient(node_id, peer_manager, logger)
 
-    # Escolha do conjunto para amostragem
-    # - final_test: CSV B
-    # - eval: holdout do CSV A
-    # - train: treino do CSV A
-    if sample_source == "final_test" and engine.X_final_test is not None:
-        X_src, y_src = engine.X_final_test, engine.y_final_test
-        src_name = "FINAL_TEST(CSV B)"
-    elif sample_source == "eval":
-        X_src, y_src = engine.X_eval, engine.y_eval
-        src_name = "EVAL(CSV A)"
-    else:
-        X_src, y_src = engine.X_train, engine.y_train
-        src_name = "TRAIN(CSV A)"
+    # Escolha do conjunto para amostragem (prioriza RAW)
+    X_src, y_src, src_name = _pick_source(engine, sample_source)
 
     # Proteção de índice
     sample_index = int(sample_index)
     if sample_index < 0 or sample_index >= len(X_src):
         sample_index = 0
 
+    # >>> IMPORTANTÍSSIMO: sample deve ser RAW (quando disponível) <<<
     sample = X_src[sample_index]
     ground_truth = y_src[sample_index]
 
@@ -100,6 +122,7 @@ def run_trigger(ip="127.0.0.1", port=5000, sample_index=0, ml_override=None, sam
     print(f"\n{Colors.OKGREEN}[*] Nó {node_id} processando tráfego e verificando conflitos...{Colors.ENDC}")
     print(f"[{node_id.upper()}] (Ground Truth para esta amostra: {ground_truth})")
 
+    # Engine espera RAW e escala internamente
     results = engine.classify_and_check_conflict(sample)
 
     classification = results['classification']
@@ -117,11 +140,11 @@ def run_trigger(ip="127.0.0.1", port=5000, sample_index=0, ml_override=None, sam
 
         other_peers = peer_manager.get_other_peers()
         if not other_peers:
-            print(
-                f"[{node_id.upper()}] Ação: Conflito detectado, mas não há outros pares. Usando decisão local padrão.")
-            best_model_class = engine.counseling_logic(sample)
+            print(f"[{node_id.upper()}] Ação: Conflito detectado, mas não há outros pares. Usando decisão local padrão.")
+            best_model_class = engine.counseling_logic(sample)  # sample RAW
             return "INTRUSION" if best_model_class != "NORMAL" else "NORMAL"
 
+        # >>> Envia RAW para os peers (cada peer aplica seu scaler local) <<<
         counsel_response = client.request_counsel(sample, other_peers, ground_truth, initial_chain)
         if counsel_response and counsel_response.get("decision") == "INTRUSION":
             return "INTRUSION"
@@ -136,8 +159,8 @@ def main():
     # Exemplo: CSV A (treino+avaliação) e CSV B (teste final)
     nodes_config = [
         ("127.0.0.1", 5000, {
-            "train_eval_dataset_source": "dataset_01.csv",
-            "final_test_dataset_source": "Dataset_Completo_Multiclasse.csv",
+            "train_eval_dataset_source": "dataset_01_400_train.csv",
+            "final_test_dataset_source": "dataset_01_100_test.csv",
             "target_column": "class",
             "eval_size": 0.30,
             "clustering_n_clusters": 5,
@@ -145,8 +168,8 @@ def main():
             "f1_min_required": 0.80
         }),
         ("127.0.0.1", 5001, {
-            "train_eval_dataset_source": "Dataset_Completo_Multiclasse.csv",
-            "final_test_dataset_source": "Dataset_Completo_Multiclasse.csv",
+            "train_eval_dataset_source": "dataset500multiclass.csv",
+            "final_test_dataset_source": "dataset500multiclass.csv",
             "target_column": "class",
             "eval_size": 0.30,
             "clustering_n_clusters": 5,
@@ -155,8 +178,8 @@ def main():
             "outlier_enabled": True
         }),
         ("127.0.0.1", 5002, {
-            "train_eval_dataset_source": "Dataset_Completo_Multiclasse.csv",
-            "final_test_dataset_source": "Dataset_Completo_Multiclasse.csv",
+            "train_eval_dataset_source": "dataset500multiclass.csv",
+            "final_test_dataset_source": "dataset500multiclass.csv",
             "target_column": "class",
             "eval_size": 0.30,
             "clustering_n_clusters": 5,
@@ -174,8 +197,15 @@ def main():
         p.start()
         procs.append(p)
 
-    print(f"{Colors.WARNING}[*] Aguardando 5s para inicialização...{Colors.ENDC}")
-    time.sleep(5)
+    print(f"{Colors.WARNING}[*] Aguardando nós ficarem online (portas abertas)...{Colors.ENDC}")
+
+    peer_ports = [(ip, port) for ip, port, _ in nodes_config]
+    not_ready = wait_for_peer_ports(peer_ports, timeout_sec=180, interval_sec=1.0)
+
+    if not_ready:
+        print(f"{Colors.WARNING}[!] Atenção: alguns nós ainda não estão online: {not_ready}{Colors.ENDC}")
+    else:
+        print(f"{Colors.OKGREEN}[*] Todos os nós estão online.{Colors.ENDC}")
 
     ml_override_no1 = nodes_config[0][2]
     resultado = run_trigger(
@@ -183,7 +213,7 @@ def main():
         port=5000,
         sample_index=1,
         ml_override=ml_override_no1,
-        sample_source="final_test"  # <--- aqui você escolhe
+        sample_source="final_test"  # final_test / eval / train
     )
 
     print(f"\n{Colors.HEADER}=== RESULTADO DA SIMULAÇÃO ==={Colors.ENDC}")
@@ -201,6 +231,28 @@ def main():
         for p in procs:
             p.join()
 
+def wait_for_peer_ports(peers, timeout_sec=120, interval_sec=1.0):
+    """
+    Espera até que todas as portas dos peers estejam aceitando conexão TCP.
+    peers: lista de tuplas (ip, port)
+    """
+    deadline = time.time() + timeout_sec
+    pending = set(peers)
+
+    while pending and time.time() < deadline:
+        to_remove = set()
+        for ip, port in pending:
+            try:
+                with socket.create_connection((ip, port), timeout=0.5):
+                    to_remove.add((ip, port))
+            except OSError:
+                pass
+
+        pending -= to_remove
+        if pending:
+            time.sleep(interval_sec)
+
+    return list(pending)  # retorna as que não subiram
 
 if __name__ == "__main__":
     main()

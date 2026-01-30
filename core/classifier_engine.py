@@ -32,59 +32,101 @@ class ClassifierEngine:
     """
     MODELOS GLOBAIS + AVALIAÇÃO POR CLUSTER + DETECÇÃO DE OUTLIER (OOD) POR DISTÂNCIA AO CENTRÓIDE
 
-    IMPORTANTE (FIX):
-      - X_final_test deve ficar RAW (não escalado) para evitar double-scaling
-        quando o simulador pega engine.X_final_test[idx] e depois chama classify_and_check_conflict().
+    CSV A (train_eval_dataset_source):
+      - Split em TRAIN e EVAL (eval_size)
+      - Scaler e KMeans ajustados SOMENTE no TRAIN
+      - Treina 1 pool global de modelos usando TODO o TRAIN
+      - Atribui cluster em TRAIN e EVAL via KMeans
+      - Para cada cluster:
+          * avalia MODELOS GLOBAIS nas amostras EVAL daquele cluster
+          * computa F1 por modelo no cluster
+          * seleciona committee: f1 >= (max_f1 - f1_threshold)
+          * cluster fica "não confiável" se max_f1 < f1_min_required ou se não há selecionados
+
+    Detecção de Outlier (OOD):
+      - Para cada cluster, calcula distâncias no TRAIN até o centróide e define um threshold por percentil
+      - Na inferência: se dist(sample, centroid) > threshold(cluster) => CONFLICT_DETECTED (força consulta)
+
+    CSV B (final_test_dataset_source):
+      - Usado apenas como teste final (não influencia treino/seleção)
     """
 
     def __init__(self, ml_config):
         self.config = ml_config
 
-        # Parâmetros
+        # -----------------------
+        # Parâmetros principais
+        # -----------------------
         self.n_clusters = int(self.config.get("clustering_n_clusters", 5))
+
+        # Committee: modelos com f1 >= (max_f1 - f1_threshold) no cluster (EVAL)
         self.f1_threshold = float(self.config.get("f1_threshold", 0.05))
         self.f1_min_required = float(self.config.get("f1_min_required", 0.80))  # 0..1
 
         self.random_state = int(self.config.get("random_state", 42))
         self.use_stratify = bool(self.config.get("stratify", True))
 
+        # Split do CSV A
         self.eval_size = float(self.config.get("eval_size", 0.30))
+
+        # (Opcional) mínimos para evitar clusters vazios no EVAL (mantive leve)
         self.min_cluster_eval_samples = int(self.config.get("min_cluster_eval_samples", 10))
 
+        # Outlier/OOD
         self.outlier_enabled = bool(self.config.get("outlier_enabled", True))
         self.outlier_percentile = float(self.config.get("outlier_percentile", 97.0))
 
+        # Dataset sources
         self.train_eval_source = self.config.get(
             "train_eval_dataset_source",
-            self.config.get("training_dataset_source", "auto"),
+            self.config.get("training_dataset_source", "auto")
         )
         self.final_test_source = self.config.get("final_test_dataset_source", None)
         self.target_column = self.config.get("target_column", None)
 
-        # Estruturas
+        # -----------------------
+        # Estruturas internas
+        # -----------------------
         self.scaler = None
         self.kmeans = None
 
-        self.X_train = None
+        # CSV A: split (mantemos RAW e escalado)
+        # RAW é importante para:
+        #   - enviar amostra original (não escalada) na rede
+        #   - permitir re-fit consistente do scaler/KMeans em cenários de aprendizado contínuo
+        self.X_train_raw = None
         self.y_train = None
-        self.X_eval = None
+        self.X_eval_raw = None
         self.y_eval = None
 
-        # TEST final RAW (FIX)
-        self.X_final_test = None          # RAW (mantido por compatibilidade)
-        self.X_final_test_scaled = None   # opcional
+        # Versões escaladas (usadas por KMeans e modelos)
+        self.X_train = None
+        self.X_eval = None
+
+        # CSV B: final test (RAW + escalado)
+        self.X_final_test_raw = None
+        self.X_final_test = None
         self.y_final_test = None
 
+        # cluster ids
         self.clusters_train = None
         self.clusters_eval = None
 
+        # Pool global de modelos
+        # {name: fitted_model}
         self.global_models = {}
+
+        # Por cluster: committee selecionado (referências aos modelos globais)
+        # {cluster_id: {'best_models': [ {'name','model','f1'}, ... ],
+        #              'max_f1': float, 'below_min_f1': bool, 'reason': str,
+        #              'n_train': int, 'n_eval': int}}
         self.cluster_classifiers = {}
 
-        self.cluster_outlier_thresholds = {}
-        self.cluster_outlier_stats = {}
+        # Outlier thresholds por cluster
+        self.cluster_outlier_thresholds = {}  # {cluster_id: threshold}
+        self.cluster_outlier_stats = {}       # {cluster_id: {'p':..,'mean':..,'std':..,'max':..}}
 
-        # Build
+        # Build pipeline
         self._load_train_eval_data()
         self._fit_scaler_and_cluster()
         self._fit_outlier_thresholds_from_train()
@@ -92,9 +134,9 @@ class ClassifierEngine:
         self._select_committee_per_cluster()
         self._load_final_test_data()
 
-    # -------------------------
-    # Helpers
-    # -------------------------
+    # ---------------------------------------------------------
+    # Helpers de carregamento
+    # ---------------------------------------------------------
     def _resolve_path(self, filename):
         if filename == "auto":
             return "auto"
@@ -126,29 +168,9 @@ class ClassifierEngine:
 
         return X, y
 
-    def _safe_train_test_split(self, X, y, test_size):
-        """Split com stratify quando possível; fallback sem stratify se dataset tiver classes raras."""
-        strat = y if (self.use_stratify and len(np.unique(y)) > 1) else None
-        try:
-            return train_test_split(
-                X, y,
-                test_size=test_size,
-                random_state=self.random_state,
-                stratify=strat
-            )
-        except ValueError as e:
-            # comum quando existe classe com 1 amostra
-            print(f"[ENGINE] WARNING: stratify split failed ({e}). Falling back to non-stratified split.")
-            return train_test_split(
-                X, y,
-                test_size=test_size,
-                random_state=self.random_state,
-                stratify=None
-            )
-
-    # -------------------------
-    # 1) CSV A -> TRAIN/EVAL
-    # -------------------------
+    # ---------------------------------------------------------
+    # 1) CSV A -> split TRAIN/EVAL
+    # ---------------------------------------------------------
     def _load_train_eval_data(self):
         src = self._resolve_path(self.train_eval_source)
         print(f"[ENGINE] Loading TRAIN+EVAL source: {src}")
@@ -162,22 +184,30 @@ class ClassifierEngine:
             X, y = self._load_csv(src)
             print(f"[ENGINE] INFO: TRAIN+EVAL loaded. {X.shape[0]} samples, {X.shape[1]} features.")
 
-        X_train, X_eval, y_train, y_eval = self._safe_train_test_split(X, y, test_size=self.eval_size)
+        strat = y if (self.use_stratify and len(np.unique(y)) > 1) else None
+        X_train, X_eval, y_train, y_eval = train_test_split(
+            X, y,
+            test_size=self.eval_size,
+            random_state=self.random_state,
+            stratify=strat
+        )
 
         self.X_train = X_train
+        self.X_train_raw = X_train
         self.y_train = y_train
-        self.X_eval = X_eval
+        self.X_eval_raw = X_eval
         self.y_eval = y_eval
 
-        print(f"[ENGINE] SPLIT A: TRAIN={self.X_train.shape[0]} | EVAL={self.X_eval.shape[0]}")
+        print(f"[ENGINE] SPLIT A: TRAIN={self.X_train_raw.shape[0]} | EVAL={self.X_eval_raw.shape[0]}")
 
-    # -------------------------
-    # 2) scaler + kmeans no TRAIN
-    # -------------------------
+    # ---------------------------------------------------------
+    # 2) fit scaler + kmeans SOMENTE no TRAIN e atribui clusters
+    # ---------------------------------------------------------
     def _fit_scaler_and_cluster(self):
         self.scaler = StandardScaler()
-        self.X_train = self.scaler.fit_transform(self.X_train)
-        self.X_eval = self.scaler.transform(self.X_eval)
+        # IMPORTANT: scaler ajustado somente no TRAIN (RAW)
+        self.X_train = self.scaler.fit_transform(self.X_train_raw)
+        self.X_eval = self.scaler.transform(self.X_eval_raw)
 
         print(f"[ENGINE] Fitting K-Means on TRAIN (K={self.n_clusters})...")
         self.kmeans = KMeans(n_clusters=self.n_clusters, random_state=self.random_state, n_init="auto")
@@ -188,20 +218,21 @@ class ClassifierEngine:
 
         print("[ENGINE] K-Means fit complete. Clusters assigned for TRAIN and EVAL.")
 
-    # -------------------------
-    # OUTLIER thresholds no TRAIN
-    # -------------------------
+    # ---------------------------------------------------------
+    # OUTLIER: thresholds por cluster usando TRAIN
+    # ---------------------------------------------------------
     def _fit_outlier_thresholds_from_train(self):
         self.cluster_outlier_thresholds = {}
         self.cluster_outlier_stats = {}
 
         if not self.outlier_enabled:
+            # thresholds infinitos => nunca dispara
             for c in range(self.n_clusters):
                 self.cluster_outlier_thresholds[c] = float("inf")
             print("[ENGINE] Outlier detection disabled.")
             return
 
-        centers = self.kmeans.cluster_centers_
+        centers = self.kmeans.cluster_centers_  # no espaço escalado
         p = float(self.outlier_percentile)
 
         for c in range(self.n_clusters):
@@ -227,13 +258,14 @@ class ClassifierEngine:
 
         print(f"[ENGINE] Outlier thresholds fit from TRAIN using percentile p={p:.1f}.")
 
-    # -------------------------
+    # ---------------------------------------------------------
     # Instanciar classificador
-    # -------------------------
+    # ---------------------------------------------------------
     def _instantiate_classifier(self, name: str):
         cls = CLASSIFIER_MAP.get(name)
         if not cls:
             return None
+
         try:
             if name in ["GaussianNB", "KNeighborsClassifier"]:
                 return cls()
@@ -244,30 +276,18 @@ class ClassifierEngine:
             except Exception:
                 return None
 
-    # -------------------------
-    # 3) Modelos globais no TRAIN
-    # -------------------------
+    # ---------------------------------------------------------
+    # 3) Treina modelos globais no TRAIN completo
+    # ---------------------------------------------------------
     def _train_global_models(self):
         self.global_models = {}
         print("[ENGINE] Training GLOBAL models on full TRAIN (excluding EVAL)...")
-
-        # se TRAIN ficou monoclasse, não tem como treinar alguns modelos
-        n_classes = len(np.unique(self.y_train))
-        if n_classes < 2:
-            print(f"[ENGINE] ERROR: TRAIN has only 1 class (n_classes={n_classes}). Check your dataset split/filter.")
-            # você pode sys.exit(1) se preferir abortar
-            # sys.exit(1)
 
         for name in self.config.get("classifiers", []):
             model = self._instantiate_classifier(name)
             if model is None:
                 continue
             try:
-                # alguns modelos quebram com 1 classe
-                if len(np.unique(self.y_train)) < 2:
-                    print(f"[ENGINE] WARN: Skipping {name} because TRAIN has 1 class.")
-                    continue
-
                 model.fit(self.X_train, self.y_train)
                 self.global_models[name] = model
                 print(f"[ENGINE] GLOBAL model trained: {name}")
@@ -275,12 +295,12 @@ class ClassifierEngine:
                 print(f"[ENGINE] WARN: Failed to train GLOBAL model {name}: {repr(e)}")
 
         if not self.global_models:
-            print("[ENGINE] ERROR: No global models could be trained. Check classifiers config / data.")
+            print("[ENGINE] ERROR: No global models could be trained. Check classifiers config.")
             sys.exit(1)
 
-    # -------------------------
-    # 4) Committee por cluster (EVAL)
-    # -------------------------
+    # ---------------------------------------------------------
+    # 4) Seleção do committee por cluster usando EVAL
+    # ---------------------------------------------------------
     def _select_committee_per_cluster(self):
         print("[ENGINE] Selecting committee per cluster using EVAL (global models)...")
         self.cluster_classifiers = {}
@@ -292,6 +312,7 @@ class ClassifierEngine:
             X_ev_c = self.X_eval[ev_idx]
             y_ev_c = self.y_eval[ev_idx]
 
+            # Se o EVAL do cluster for muito pequeno, marcamos como não confiável (leve)
             if len(ev_idx) < self.min_cluster_eval_samples:
                 self.cluster_classifiers[cluster_id] = {
                     "best_models": [],
@@ -357,9 +378,9 @@ class ClassifierEngine:
 
         print("[ENGINE] Committee selection complete.")
 
-    # -------------------------
-    # 5) CSV B -> teste final (RAW!)
-    # -------------------------
+    # ---------------------------------------------------------
+    # 5) CSV B -> teste final
+    # ---------------------------------------------------------
     def _load_final_test_data(self):
         if not self.final_test_source:
             print("[ENGINE] Final test source not provided. Skipping CSV B.")
@@ -380,26 +401,23 @@ class ClassifierEngine:
             print(f"[ENGINE] ERROR: FINAL TEST has {X.shape[1]} features, TRAIN has {self.X_train.shape[1]}.")
             sys.exit(1)
 
-        # FIX: manter RAW para não dar double-scaling no simulador
-        self.X_final_test = X
+        # Mantém RAW para envio na rede; e escalado para avaliações locais rápidas
+        self.X_final_test_raw = X
+        self.X_final_test = self.scaler.transform(X)
         self.y_final_test = y
-
-        # se você quiser usar internamente, mantém versão escalada também
-        self.X_final_test_scaled = self.scaler.transform(X)
-
         print(f"[ENGINE] FINAL TEST ready: {self.X_final_test.shape[0]} samples.")
 
-    # -------------------------
-    # Inferência + OOD
-    # -------------------------
+    # ---------------------------------------------------------
+    # Inferência (amostra única) + OUTLIER OOD
+    # ---------------------------------------------------------
     def classify_and_check_conflict(self, sample_data):
         if self.scaler is None or self.kmeans is None:
             return {"classification": "UNKNOWN", "conflict": True, "decisions": ["Engine not ready"], "cluster_id": -1}
 
-        # assume sample_data RAW (FIX)
         sample_scaled = self.scaler.transform(sample_data.reshape(1, -1))
         cluster_id = int(self.kmeans.predict(sample_scaled)[0])
 
+        # 0) OOD/outlier por distância ao centróide do cluster escolhido
         if self.outlier_enabled:
             centroid = self.kmeans.cluster_centers_[cluster_id]
             dist = float(np.linalg.norm(sample_scaled[0] - centroid))
@@ -418,6 +436,7 @@ class ClassifierEngine:
 
         dcs = self.cluster_classifiers[cluster_id]
 
+        # 1) Força conflito se cluster não confiável por F1/seleção
         if dcs.get("below_min_f1", False):
             reason = dcs.get("reason", "UNTRUSTED_CLUSTER")
             max_f1 = dcs.get("max_f1", -1.0)
@@ -432,6 +451,7 @@ class ClassifierEngine:
         if not models:
             return {"classification": "CONFLICT_DETECTED", "conflict": True, "decisions": ["No selected models"], "cluster_id": cluster_id}
 
+        # 2) Voto do committee
         decisions = []
         for info in models:
             try:
@@ -446,9 +466,9 @@ class ClassifierEngine:
 
         return {"classification": final_class, "conflict": bool(conflict), "decisions": decisions, "cluster_id": cluster_id}
 
-    # -------------------------
+    # ---------------------------------------------------------
     # Voto único (conselheiro)
-    # -------------------------
+    # ---------------------------------------------------------
     def counseling_logic(self, sample_data):
         if self.scaler is None or self.kmeans is None:
             return "UNKNOWN"
@@ -476,3 +496,47 @@ class ClassifierEngine:
             return str(pred)
         except Exception:
             return "UNKNOWN"
+
+    # ---------------------------------------------------------
+    # Aprendizado online (opcional): adiciona amostra RAW ao TRAIN e re-treina o pipeline
+    # ---------------------------------------------------------
+    def add_training_sample_raw(self, sample_raw, label, retrain: bool = True):
+        """Adiciona uma amostra rotulada ao conjunto de TRAIN (CSV A / porção TRAIN).
+
+        Importante: como o scaler e o KMeans são ajustados no TRAIN, adicionar dados
+        exige re-ajuste do pipeline para manter consistência.
+        """
+        x = np.asarray(sample_raw, dtype=float).reshape(1, -1)
+
+        if self.X_train_raw is None or self.y_train is None:
+            # fallback defensivo
+            self.X_train_raw = x
+            self.y_train = np.asarray([label])
+        else:
+            self.X_train_raw = np.vstack([self.X_train_raw, x])
+            self.y_train = np.append(self.y_train, label)
+
+        if not retrain:
+            return
+
+        # Refit completo do pipeline (mantém EVAL fixo)
+        self._fit_scaler_and_cluster()
+        self._fit_outlier_thresholds_from_train()
+        self._train_global_models()
+        self._select_committee_per_cluster()
+
+        # Se existir CSV B carregado, re-transforma com o novo scaler
+        if self.X_final_test_raw is not None:
+            self.X_final_test = self.scaler.transform(self.X_final_test_raw)
+
+    def rebuild(self):
+        """Reconstroi o pipeline (scaler/kmeans/outlier/models/committee) com o TRAIN atual.
+
+        Mantém EVAL fixo e, se CSV B estiver carregado, re-transforma o FINAL_TEST com o scaler atualizado.
+        """
+        self._fit_scaler_and_cluster()
+        self._fit_outlier_thresholds_from_train()
+        self._train_global_models()
+        self._select_committee_per_cluster()
+        if self.X_final_test_raw is not None:
+            self.X_final_test = self.scaler.transform(self.X_final_test_raw)
