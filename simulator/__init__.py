@@ -20,6 +20,26 @@ class Colors:
     BOLD = '\033[1m'
 
 
+def wait_for_peer_ports(peers, timeout_sec=120, interval_sec=1.0):
+    deadline = time.time() + timeout_sec
+    pending = set(peers)
+
+    while pending and time.time() < deadline:
+        to_remove = set()
+        for ip, port in pending:
+            try:
+                with socket.create_connection((ip, port), timeout=0.5):
+                    to_remove.add((ip, port))
+            except OSError:
+                pass
+
+        pending -= to_remove
+        if pending:
+            time.sleep(interval_sec)
+
+    return list(pending)
+
+
 def _get_other_peers_ip_port(self):
     return [
         p for p in self.peers
@@ -61,11 +81,6 @@ def node_process(ip, port, ml_override=None):
 
 
 def _pick_source(engine: ClassifierEngine, sample_source: str):
-    """
-    Retorna (X_src, y_src, src_name) priorizando SEMPRE os arrays RAW quando disponíveis.
-    Isso evita enviar amostras escaladas ao solicitar conselho (double scaling nos peers).
-    """
-    # helpers: pega RAW se existir, senão usa scaled
     def raw_or_scaled(raw_attr, scaled_attr):
         if hasattr(engine, raw_attr) and getattr(engine, raw_attr) is not None:
             return getattr(engine, raw_attr), True
@@ -78,42 +93,25 @@ def _pick_source(engine: ClassifierEngine, sample_source: str):
         return X_src, y_src, src_name
 
     if sample_source == "eval":
-        # pode existir mesmo sem CSV B
         X_src, is_raw = raw_or_scaled("X_eval_raw", "X_eval")
         y_src = engine.y_eval
         src_name = "EVAL(CSV A)" + (" [RAW]" if is_raw else " [SCALED/FALLBACK]")
         return X_src, y_src, src_name
 
-    # default: train
     X_src, is_raw = raw_or_scaled("X_train_raw", "X_train")
     y_src = engine.y_train
     src_name = "TRAIN(CSV A)" + (" [RAW]" if is_raw else " [SCALED/FALLBACK]")
     return X_src, y_src, src_name
 
 
-def run_trigger(ip="127.0.0.1", port=5000, sample_index=0, ml_override=None, sample_source="final_test"):
-    if ml_override:
-        ML_OVERRIDES_BY_PORT[port] = ml_override
-
-    peer_manager = ConfigManager(ip, local_port=port)
-    node_id = peer_manager.node_id
-
-    logger = CounselorLogger(node_id, use_log_folder=False)
-    ml_config = peer_manager.get_ml_config()
-
-    engine = ClassifierEngine(ml_config)
-    client = CounselorClient(node_id, peer_manager, logger)
-
-    # Escolha do conjunto para amostragem (prioriza RAW)
+def run_trigger_with_instances(peer_manager, node_id, engine, client, sample_index=0, sample_source="final_test"):
     X_src, y_src, src_name = _pick_source(engine, sample_source)
 
-    # Proteção de índice
     sample_index = int(sample_index)
     if sample_index < 0 or sample_index >= len(X_src):
         sample_index = 0
 
-    # >>> IMPORTANTÍSSIMO: sample deve ser RAW (quando disponível) <<<
-    sample = X_src[sample_index]
+    sample_raw = X_src[sample_index]
     ground_truth = y_src[sample_index]
 
     print(f"\n{Colors.BOLD}[SORTEIO]{Colors.ENDC} Fonte={src_name} | Amostra #{sample_index} selecionada.")
@@ -122,8 +120,7 @@ def run_trigger(ip="127.0.0.1", port=5000, sample_index=0, ml_override=None, sam
     print(f"\n{Colors.OKGREEN}[*] Nó {node_id} processando tráfego e verificando conflitos...{Colors.ENDC}")
     print(f"[{node_id.upper()}] (Ground Truth para esta amostra: {ground_truth})")
 
-    # Engine espera RAW e escala internamente
-    results = engine.classify_and_check_conflict(sample)
+    results = engine.classify_and_check_conflict(sample_raw)
 
     classification = results['classification']
     conflict = results['conflict']
@@ -133,7 +130,7 @@ def run_trigger(ip="127.0.0.1", port=5000, sample_index=0, ml_override=None, sam
     print(f"[{node_id.upper()}] Resultado DCS Local (Cluster {cluster_id}): {classification}")
     print(f"[{node_id.upper()}] Decisões Locais (Classes): {decisions}")
 
-    initial_chain = [f"{ip}:{port}"]
+    initial_chain = [f"{peer_manager.local_ip}:{peer_manager.local_port}"]
 
     if conflict:
         print(f"[{node_id.upper()}] Alerta: CONFLITO DETECTADO! Consultando a Counselors Network.")
@@ -141,22 +138,21 @@ def run_trigger(ip="127.0.0.1", port=5000, sample_index=0, ml_override=None, sam
         other_peers = peer_manager.get_other_peers()
         if not other_peers:
             print(f"[{node_id.upper()}] Ação: Conflito detectado, mas não há outros pares. Usando decisão local padrão.")
-            best_model_class = engine.counseling_logic(sample)  # sample RAW
-            return "INTRUSION" if best_model_class != "NORMAL" else "NORMAL"
+            best_model_class = engine.counseling_logic(sample_raw)
+            return best_model_class, sample_index, sample_raw, ground_truth
 
-        # >>> Envia RAW para os peers (cada peer aplica seu scaler local) <<<
-        counsel_response = client.request_counsel(sample, other_peers, ground_truth, initial_chain)
-        if counsel_response and counsel_response.get("decision") == "INTRUSION":
-            return "INTRUSION"
-        return "NORMAL"
+        counsel_response = client.request_counsel(sample_raw, other_peers, ground_truth, initial_chain)
+        return counsel_response, sample_index, sample_raw, ground_truth
 
-    return "INTRUSION" if classification != "NORMAL" else "NORMAL"
+    return classification, sample_index, sample_raw, ground_truth
 
 
 def main():
+    import os
+    print("[DEBUG] CWD =", os.getcwd())
+
     print(f"{Colors.HEADER}{Colors.BOLD}=== SIMULADOR DE REDE P2P COUNSELORS (MULTIPROCESS) ==={Colors.ENDC}")
 
-    # Exemplo: CSV A (treino+avaliação) e CSV B (teste final)
     nodes_config = [
         ("127.0.0.1", 5000, {
             "train_eval_dataset_source": "dataset_01_400_train.csv",
@@ -198,7 +194,6 @@ def main():
         procs.append(p)
 
     print(f"{Colors.WARNING}[*] Aguardando nós ficarem online (portas abertas)...{Colors.ENDC}")
-
     peer_ports = [(ip, port) for ip, port, _ in nodes_config]
     not_ready = wait_for_peer_ports(peer_ports, timeout_sec=180, interval_sec=1.0)
 
@@ -207,21 +202,75 @@ def main():
     else:
         print(f"{Colors.OKGREEN}[*] Todos os nós estão online.{Colors.ENDC}")
 
+    # Instâncias UMA vez (para manter aprendizado no loop)
     ml_override_no1 = nodes_config[0][2]
-    resultado = run_trigger(
-        ip="127.0.0.1",
-        port=5000,
-        sample_index=1,
-        ml_override=ml_override_no1,
-        sample_source="final_test"  # final_test / eval / train
-    )
+    ML_OVERRIDES_BY_PORT[5000] = ml_override_no1
 
-    print(f"\n{Colors.HEADER}=== RESULTADO DA SIMULAÇÃO ==={Colors.ENDC}")
-    print(f"Decisão Final do Sistema: {Colors.BOLD}{resultado}{Colors.ENDC}")
+    peer_manager = ConfigManager("127.0.0.1", local_port=5000)
+    node_id = peer_manager.node_id
+
+    logger = CounselorLogger(node_id, use_log_folder=True)
+    ml_config = peer_manager.get_ml_config()
+
+    engine = ClassifierEngine(ml_config)
+    client = CounselorClient(node_id, peer_manager, logger)
+
+    sample_source = "final_test"
+    sample_index = 0
 
     try:
         while True:
-            time.sleep(1)
+            resultado, used_index, sample_raw, ground_truth = run_trigger_with_instances(
+                peer_manager=peer_manager,
+                node_id=node_id,
+                engine=engine,
+                client=client,
+                sample_index=sample_index,
+                sample_source=sample_source
+            )
+
+            print(f"\n{Colors.HEADER}=== RESULTADO DA AMOSTRA ==={Colors.ENDC}")
+
+            # Se resultado é dict, veio conselho
+            if isinstance(resultado, dict):
+                learned_label = resultado.get("decision", None)
+                counselor_id = (
+                    resultado.get("name_conselheiro")
+                    or resultado.get("from_counselor")
+                    or resultado.get("counselor_id")
+                    or "UNKNOWN"
+                )
+
+                print(f"Amostra #{used_index} | Conselho: {learned_label} (de {counselor_id})")
+
+                if learned_label is not None and learned_label not in ["UNKNOWN", "LOOP_CLOSED"]:
+                    # Aprende
+                    engine.add_training_sample_raw(sample_raw, learned_label, retrain=False)
+                    engine.rebuild()
+
+                    # Log snapshot (com F1 por classificador)
+                    rows = engine.get_cluster_f1_snapshot_rows()
+                    logger.log_cluster_f1_snapshot(
+                        rows=rows,
+                        event="ADVICE_LEARN",
+                        sample_label=str(learned_label),
+                        counselor_id=str(counselor_id)
+                    )
+
+                    print(f"{Colors.OKGREEN}[LEARN]{Colors.ENDC} Aprendeu label={learned_label} e atualizou o log.")
+                else:
+                    print(f"{Colors.WARNING}[LEARN]{Colors.ENDC} Sem label útil para aprendizado (decision={learned_label}).")
+
+            else:
+                # Sem conselho
+                print(f"Amostra #{used_index} | Decisão Local: {Colors.BOLD}{resultado}{Colors.ENDC}")
+
+            # Próxima amostra
+            X_src, _, _ = _pick_source(engine, sample_source)
+            sample_index = (used_index + 1) % len(X_src)
+
+            time.sleep(5)
+
     except KeyboardInterrupt:
         print(f"\n{Colors.FAIL}[!] Encerrando simulação...{Colors.ENDC}")
     finally:
@@ -231,28 +280,6 @@ def main():
         for p in procs:
             p.join()
 
-def wait_for_peer_ports(peers, timeout_sec=120, interval_sec=1.0):
-    """
-    Espera até que todas as portas dos peers estejam aceitando conexão TCP.
-    peers: lista de tuplas (ip, port)
-    """
-    deadline = time.time() + timeout_sec
-    pending = set(peers)
-
-    while pending and time.time() < deadline:
-        to_remove = set()
-        for ip, port in pending:
-            try:
-                with socket.create_connection((ip, port), timeout=0.5):
-                    to_remove.add((ip, port))
-            except OSError:
-                pass
-
-        pending -= to_remove
-        if pending:
-            time.sleep(interval_sec)
-
-    return list(pending)  # retorna as que não subiram
 
 if __name__ == "__main__":
     main()

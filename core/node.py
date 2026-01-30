@@ -12,22 +12,45 @@ from infrastructure.logger import CounselorLogger
 from core.classifier_engine import ClassifierEngine
 
 
-
-
 class CounselorNode:
     """A classe principal que representa o IDS (Detector) na Counselors Network."""
 
-    def learn_with_advice(self, sample, label):
-        # Transforma o sample em linha de uma dimensão (1D), ao invés de matriz 2D
-        sample = sample.reshape(1, -1)
+    def learn_with_advice(self, sample_raw, label, counselor_id="UNKNOWN"):
+        """
+        Aprendizado online:
+        - adiciona a amostra RAW no TRAIN_RAW
+        - re-treina pipeline (rebuild)
+        - escreve log de F1 por cluster após a atualização
+        """
+        # Garante shape 1D (n_features,)
+        sample_raw = np.asarray(sample_raw, dtype=float).reshape(-1)
 
-        # Adiciona a nova amostra às features de treino
-        self.engine.X_train = np.vstack([self.engine.X_train, sample])
-        self.engine.y_train = np.append(self.engine.y_train, label)
+        # 1) adiciona no RAW (não no escalado!)
+        if hasattr(self.engine, "add_training_sample_raw"):
+            self.engine.add_training_sample_raw(sample_raw, label, retrain=False)
+        else:
+            # fallback (menos recomendado): atualiza X_train_raw manualmente
+            x = sample_raw.reshape(1, -1)
+            self.engine.X_train_raw = np.vstack([self.engine.X_train_raw, x])
+            self.engine.y_train = np.append(self.engine.y_train, label)
 
-        #Re-executa os processos do motor de aprendizado
+        # 2) refaz todo o pipeline
         self.engine.rebuild()
-        print("O nó {self.node_id} aprendeu com a amostra {sample} de rótulo {label}.")
+
+        # 3) snapshot de F1 por cluster e log
+        if hasattr(self.engine, "get_cluster_f1_snapshot_rows"):
+            rows = self.engine.get_cluster_f1_snapshot_rows()
+            if hasattr(self.logger, "log_cluster_f1_snapshot"):
+                self.logger.log_cluster_f1_snapshot(
+                    node_id=self.node_id,
+                    rows=rows,
+                    event="ADVICE_LEARN",
+                    sample_label=str(label),
+                    counselor_id=str(counselor_id)
+                )
+
+        print(f"[{self.node_id.upper()}] Aprendeu com conselho. label={label} counselor={counselor_id}")
+
 
     def __init__(self, detected_ip, local_port=None):
         # 1. Configuração (Correto: Passando IP e Porta opcional)
@@ -42,7 +65,7 @@ class CounselorNode:
         self.bind_host = '0.0.0.0'
 
         # 3. Logger
-        self.logger = CounselorLogger(self.node_id, use_log_folder=False)
+        self.logger = CounselorLogger(self.node_id, use_log_folder=True)
         print(f"Logger inicializado para o nó: {self.node_id}")
 
         # 4. Motor ML
@@ -132,12 +155,8 @@ class CounselorNode:
                         f"[{self.node_id.upper()}] (Conselheiro) Próximo peer reportou falha/loop. Propagando LOOP_CLOSED.")
                     return "LOOP_CLOSED"
 
-                if decision == 'INTRUSION':
-                    print(f"[{self.node_id.upper()}] (Conselheiro) Segundo conselho confirmou INTRUSAO.")
-                    return "INTRUSION"
-
-                print(f"[{self.node_id.upper()}] (Conselheiro) Segundo conselho decidiu por NORMAL.")
-                return "NORMAL"
+                print(f"[{self.node_id.upper()}] (Conselheiro) Segundo conselho confirmou {decision}.")
+                return decision
 
             return "LOOP_CLOSED"  # Fallback se não houver resposta
 
@@ -148,7 +167,8 @@ class CounselorNode:
 
             # Mapeamento simples: se o motor retornou 'NORMAL', enviamos 'NORMAL', caso contrário 'INTRUSION'
             # Nota: Você pode retornar a classe específica (ex: 'DoS') se o seu servidor tratar isso.
-            return "NORMAL" if classification == 'benign' else "INTRUSION"
+            return classification#"NORMAL" if classification == 'benign' else "INTRUSION"
+
     def check_traffic_and_act(self, sample_data_array, ground_truth):
         """
         Processa uma amostra de tráfego local e verifica por conflito.
@@ -185,7 +205,7 @@ class CounselorNode:
                     f"[{self.node_id.upper()}] Ação: Conflito detectado, mas não há outros pares. Usando decisão local padrão.")
                 # Retorna a decisão local de desempate
                 best_model_class = self.engine.counseling_logic(sample_data_array)
-                final_decision = "INTRUSION" if best_model_class != 'benign' else "NORMAL"
+                final_decision = best_model_class  # "INTRUSION" if best_model_class != 'benign' else "NORMAL"
                 return final_decision
 
             # O cliente seleciona um par aleatório da lista 'other_peers'
@@ -208,28 +228,36 @@ class CounselorNode:
 
                 # 3. Usa a lógica de alta confiança (melhor modelo) do ClassifierEngine para desempate
                 best_model_class = self.engine.counseling_logic(sample_data_array)
-                final_decision = "INTRUSION" if best_model_class != 'benign' else "NORMAL"
+                final_decision = best_model_class  # "INTRUSION" if best_model_class != 'benign' else "NORMAL"
 
                 print(
                     f"[{self.node_id.upper()}] WARNING: Decisão final: {final_decision} (Melhor Classificador Local). Classe: {best_model_class}")
                 # ------------------------------------------------
 
-            elif counsel_decision == 'INTRUSION':
-                final_decision = "INTRUSION"
-                print(
-                    f"[{self.node_id.upper()}] Ação: Decisão Final: {final_decision} (Confirmado por {counsel_response['counselor_id']}).")
+            # elif counsel_decision == 'INTRUSION':
+            #     final_decision = "INTRUSION"
+            #     print(
+            #         f"[{self.node_id.upper()}] Ação: Decisão Final: {final_decision} (Confirmado por {counsel_response['counselor_id']}).")
 
             else:
-                final_decision = "NORMAL"  # Resposta padrão se o conselho não for intrusão/loop
+                final_decision = counsel_decision  # "NORMAL"  # Resposta padrão se o conselho não for intrusão/loop
                 print(
-                    f"[{self.node_id.upper()}] Ação: Conflito resolvido ou sem conselho externo definitivo. Usando decisão final: {final_decision}.")
+                    f"[{self.node_id.upper()}] Ação: Decisão Final: {final_decision}"
+                    f" (Confirmado por {counsel_response['counselor_id']})."
+                )
 
-            self.learn_with_advice(sample_data_array, final_decision)
+            counselor_id = "UNKNOWN"
+            if counsel_response and isinstance(counsel_response, dict):
+                counselor_id = counsel_response.get("counselor_id", "UNKNOWN")
+
+            print(f"Aprendendo com nova amostra de {final_decision}: {sample_data_array}")
+            self.learn_with_advice(sample_data_array, final_decision, counselor_id=counselor_id)
+
             return final_decision
 
         else:
             # Se não há conflito, usamos a decisão local
-            final_decision = "INTRUSION" if classification != 'benign' else "NORMAL"
+            final_decision = classification  # "INTRUSION" if classification != 'benign' else "NORMAL"
             print(
                 f"[{self.node_id.upper()}] Classificação Local: Sem conflito detectado. Decisão Final: {final_decision}.")
             return final_decision

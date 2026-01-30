@@ -80,20 +80,13 @@ class CounselorServer:
                 final_prediction_str = self.counseling_logic_fn(amostra_array, requester_id, ip_origem, ground_truth,
                                                                 requester_chain)
 
-                if final_prediction_str == 'NORMAL':
-                    decision = "NORMAL"
-                    counsel_msg = "Análise concluída. Resultado: Tráfego normal (Alta Confiança - DCS)."
-                elif final_prediction_str == 'UNKNOWN':
-                    decision = "UNKNOWN"
-                    counsel_msg = "Análise falhou: Cluster não mapeado no Nó Conselheiro."
-                # --- NOVO: Lógica de Loop Fechado ---
-                elif final_prediction_str == 'LOOP_CLOSED':
+                if final_prediction_str == 'LOOP_CLOSED':
                     decision = "LOOP_CLOSED"
                     counsel_msg = "Alerta: Loop de aconselhamento fechado. Ninguém tem a resposta. Decisão local de melhor modelo usada."
                 # ------------------------------------
                 else:
                     # Assumimos que qualquer outra coisa é uma classe de intrusão (ex: '1', '2')
-                    decision = "INTRUSION"
+                    decision = final_prediction_str
                     counsel_msg = f"Intrusão Confirmada: Classe {final_prediction_str} (Alta Confiança via DCS)."
 
             except Exception as e:
