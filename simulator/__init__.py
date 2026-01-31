@@ -139,12 +139,12 @@ def run_trigger_with_instances(peer_manager, node_id, engine, client, sample_ind
         if not other_peers:
             print(f"[{node_id.upper()}] Ação: Conflito detectado, mas não há outros pares. Usando decisão local padrão.")
             best_model_class = engine.counseling_logic(sample_raw)
-            return best_model_class, sample_index, sample_raw, ground_truth
+            return best_model_class, sample_index, sample_raw, ground_truth, conflict
 
         counsel_response = client.request_counsel(sample_raw, other_peers, ground_truth, initial_chain)
-        return counsel_response, sample_index, sample_raw, ground_truth
+        return counsel_response, sample_index, sample_raw, ground_truth, conflict
 
-    return classification, sample_index, sample_raw, ground_truth
+    return classification, sample_index, sample_raw, ground_truth, conflict
 
 
 def main():
@@ -164,8 +164,8 @@ def main():
             "f1_min_required": 0.80
         }),
         ("127.0.0.1", 5001, {
-            "train_eval_dataset_source": "dataset500multiclass.csv",
-            "final_test_dataset_source": "dataset500multiclass.csv",
+            "train_eval_dataset_source": "dataset500multiclass-poisoned.csv",
+            "final_test_dataset_source": "dataset500multiclass-poisoned.csv",
             "target_column": "class",
             "eval_size": 0.30,
             "clustering_n_clusters": 5,
@@ -174,8 +174,8 @@ def main():
             "outlier_enabled": True
         }),
         ("127.0.0.1", 5002, {
-            "train_eval_dataset_source": "dataset500multiclass.csv",
-            "final_test_dataset_source": "dataset500multiclass.csv",
+            "train_eval_dataset_source": "dataset500multiclass-poisoned.csv",
+            "final_test_dataset_source": "dataset500multiclass-poisoned.csv",
             "target_column": "class",
             "eval_size": 0.30,
             "clustering_n_clusters": 5,
@@ -220,13 +220,13 @@ def main():
 
     try:
         while True:
-            resultado, used_index, sample_raw, ground_truth = run_trigger_with_instances(
+            resultado, used_index, sample_raw, ground_truth, conflict = run_trigger_with_instances(
                 peer_manager=peer_manager,
                 node_id=node_id,
                 engine=engine,
                 client=client,
                 sample_index=sample_index,
-                sample_source=sample_source
+                sample_source=sample_source,
             )
 
             print(f"\n{Colors.HEADER}=== RESULTADO DA AMOSTRA ==={Colors.ENDC}")
@@ -249,21 +249,35 @@ def main():
                     engine.rebuild()
 
                     # Log snapshot (com F1 por classificador)
-                    rows = engine.get_cluster_f1_snapshot_rows()
-                    logger.log_cluster_f1_snapshot(
-                        rows=rows,
-                        event="ADVICE_LEARN",
-                        sample_label=str(learned_label),
-                        counselor_id=str(counselor_id)
+                    long_rows = engine.get_long_f1_rows(
+                        rodada=used_index,
+                        sample_raw=sample_raw,
+                        decisao=learned_label,
+                        conflito=conflict
                     )
+                    logger.log_cluster_classifier_f1_long(long_rows)
 
                     print(f"{Colors.OKGREEN}[LEARN]{Colors.ENDC} Aprendeu label={learned_label} e atualizou o log.")
                 else:
+                    long_rows = engine.get_long_f1_rows(
+                        rodada=used_index,
+                        sample_raw=sample_raw,
+                        decisao=str(resultado),
+                        conflito=conflict
+                    )
+                    logger.log_cluster_classifier_f1_long(long_rows)
                     print(f"{Colors.WARNING}[LEARN]{Colors.ENDC} Sem label útil para aprendizado (decision={learned_label}).")
 
             else:
                 # Sem conselho
                 print(f"Amostra #{used_index} | Decisão Local: {Colors.BOLD}{resultado}{Colors.ENDC}")
+                long_rows = engine.get_long_f1_rows(
+                    rodada=used_index,
+                    sample_raw=sample_raw,
+                    decisao=str(resultado),
+                    conflito=conflict
+                )
+                logger.log_cluster_classifier_f1_long(long_rows)
 
             # Próxima amostra
             X_src, _, _ = _pick_source(engine, sample_source)

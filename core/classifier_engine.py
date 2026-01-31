@@ -275,18 +275,7 @@ class ClassifierEngine:
             X_ev_c = self.X_eval[ev_idx]
             y_ev_c = self.y_eval[ev_idx]
 
-            if len(ev_idx) < self.min_cluster_eval_samples:
-                self.cluster_classifiers[cluster_id] = {
-                    "best_models": [],
-                    "max_f1": -1.0,
-                    "below_min_f1": True,
-                    "reason": "EVAL_TOO_SMALL",
-                    "n_train": int(len(tr_idx)),
-                    "n_eval": int(len(ev_idx)),
-                    "f1_by_classifier": {}
-                }
-                print(f"[ENGINE] Cluster {cluster_id}: NOT_TRUSTED | EVAL_TOO_SMALL | n_train={len(tr_idx)} n_eval={len(ev_idx)}")
-                continue
+
 
             models_f1 = []
             max_f1 = -1.0
@@ -509,3 +498,67 @@ class ClassifierEngine:
             })
 
         return rows
+
+    def get_long_f1_rows(self, rodada, sample_raw, decisao, conflito):
+        """
+        Retorna linhas no formato LONG com:
+        Timestamp (preenchido pelo logger), #Rodada, Cluster, Classificador, F1-Score, Decisão, Conflito,
+        Outlier, Centroid_Distance
+
+        - centroid_distance e outlier são calculados para o cluster ATRIBUÍDO à amostra.
+          Para clusters não atribuídos, centroid_distance fica "" e outlier=False.
+        """
+        # Calcula cluster atribuído e distância ao centróide (no espaço escalado)
+        sample_scaled = self.scaler.transform(sample_raw.reshape(1, -1))
+        assigned_cluster = int(self.kmeans.predict(sample_scaled)[0])
+
+        centroid = self.kmeans.cluster_centers_[assigned_cluster]
+        dist = float(np.linalg.norm(sample_scaled[0] - centroid))
+
+        # Outlier depende do threshold do cluster (se habilitado)
+        if self.outlier_enabled:
+            thr = float(self.cluster_outlier_thresholds.get(assigned_cluster, float("inf")))
+            outlier_flag = (dist > thr)
+        else:
+            outlier_flag = False
+
+        rows = []
+        for cluster_id in range(self.n_clusters):
+            d = self.cluster_classifiers.get(cluster_id, {})
+            f1_map = d.get("f1_by_classifier", {}) or {}
+
+            # Para o cluster atribuído, preencher distância e outlier; senão, vazio/False
+            if cluster_id == assigned_cluster:
+                row_outlier = bool(outlier_flag)
+                row_dist = dist
+            else:
+                row_outlier = False
+                row_dist = ""
+
+            if not f1_map:
+                rows.append({
+                    "rodada": int(rodada),
+                    "cluster": int(cluster_id),
+                    "classificador": "N/A",
+                    "f1_score": "",
+                    "decisao": str(decisao),
+                    "conflito": bool(conflito),
+                    "outlier": row_outlier,
+                    "centroid_distance": row_dist,
+                })
+                continue
+
+            for clf_name, f1v in f1_map.items():
+                rows.append({
+                    "rodada": int(rodada),
+                    "cluster": int(cluster_id),
+                    "classificador": str(clf_name),
+                    "f1_score": float(f1v),
+                    "decisao": str(decisao),
+                    "conflito": bool(conflito),
+                    "outlier": row_outlier,
+                    "centroid_distance": row_dist,
+                })
+
+        return rows
+

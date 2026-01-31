@@ -4,15 +4,10 @@ import threading
 from datetime import datetime
 
 LOG_HEADERS = [
-    "timestamp",
-    "name_solicitante",
-    "name_conselheiro",
-    "ip_origem",
-    "ip_destino",
-    "tempo_de_processamento_ms",
-    "decisao",
-    "ground_truth"
+    "timestamp", "rodada", "cluster", "classificador", "f1_score",
+    "decisao", "conflito", "outlier", "centroid_distance"
 ]
+
 
 
 class CounselorLogger:
@@ -21,27 +16,24 @@ class CounselorLogger:
     def __init__(self, node_id, use_log_folder=True):
         self.node_id = node_id
 
-        base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+        base_dir = os.path.join(os.path .dirname(os.path.abspath(__file__)), "..")
         self.log_dir = os.path.join(base_dir, "logs") if use_log_folder else base_dir
         os.makedirs(self.log_dir, exist_ok=True)
 
         self.conflitos_log_file = os.path.join(self.log_dir, f"{self.node_id}_conflitos_gerados.csv")
         self.conselhos_log_file = os.path.join(self.log_dir, f"{self.node_id}_conselhos_recebidos.csv")
 
-        # Novo arquivo: histórico de F1 por cluster
-        self.cluster_f1_file = os.path.join(self.log_dir, f"{self.node_id}_cluster_f1_history.csv")
+        # NOVO: log em formato LONG para gráficos
+        self.cluster_long_file = os.path.join(self.log_dir, f"{self.node_id}_cluster_classifier_f1_long.csv")
 
         self.lock = threading.Lock()
 
         self._init_log_file(self.conflitos_log_file, LOG_HEADERS)
         self._init_log_file(self.conselhos_log_file, LOG_HEADERS)
 
-        cluster_headers = [
-            "timestamp", "node_id", "event", "counselor_id", "sample_label",
-            "cluster_id", "max_f1", "selected_models", "below_min_f1", "reason",
-            "n_train", "n_eval", "f1_by_classifier"
-        ]
-        self._init_log_file(self.cluster_f1_file, cluster_headers)
+        # Cabeçalho LONG (pedido)
+        long_headers = ["timestamp", "rodada", "cluster", "classificador", "f1_score", "decisao", "conflito", "outlier", "centroid_distance"]
+        self._init_log_file(self.cluster_long_file, long_headers)
 
     def _init_log_file(self, file_path, headers):
         with self.lock:
@@ -89,36 +81,30 @@ class CounselorLogger:
         ]
         self._log_to_file(self.conselhos_log_file, row_data)
 
-    def log_cluster_f1_snapshot(self, rows, event, sample_label, counselor_id="UNKNOWN"):
+    # -------- NOVO (formato LONG pedido) --------
+    def log_cluster_classifier_f1_long(self, rows):
+        """
+        rows: lista de dicts com chaves:
+          - rodada, cluster, classificador, f1_score, decisao, conflito
+        """
         ts = datetime.now().isoformat(timespec="seconds")
 
         with self.lock:
             try:
-                with open(self.cluster_f1_file, "a", newline="", encoding="utf-8") as f:
-                    writer = csv.DictWriter(
-                        f,
-                        fieldnames=[
-                            "timestamp", "node_id", "event", "counselor_id", "sample_label",
-                            "cluster_id", "max_f1", "selected_models", "below_min_f1", "reason",
-                            "n_train", "n_eval", "f1_by_classifier"
-                        ],
-                    )
-
+                with open(self.cluster_long_file, "a", newline="", encoding="utf-8") as f:
+                    writer = csv.writer(f)
                     for r in rows:
-                        writer.writerow({
-                            "timestamp": ts,
-                            "node_id": self.node_id,
-                            "event": event,
-                            "counselor_id": counselor_id,
-                            "sample_label": sample_label,
-                            "cluster_id": r.get("cluster_id"),
-                            "max_f1": r.get("max_f1"),
-                            "selected_models": r.get("selected_models"),
-                            "below_min_f1": r.get("below_min_f1"),
-                            "reason": r.get("reason"),
-                            "n_train": r.get("n_train"),
-                            "n_eval": r.get("n_eval"),
-                            "f1_by_classifier": r.get("f1_by_classifier"),
-                        })
+                        writer.writerow([
+                            ts,
+                            r.get("rodada"),
+                            r.get("cluster"),
+                            r.get("classificador"),
+                            r.get("f1_score"),
+                            r.get("decisao"),
+                            r.get("conflito"),
+                            r.get("outlier"),
+                            r.get("centroid_distance"),
+                        ])
+
             except IOError as e:
-                print(f"ERRO DE LOG: Falha ao escrever em {self.cluster_f1_file}: {e}")
+                print(f"ERRO DE LOG: Falha ao escrever em {self.cluster_long_file}: {e}")
