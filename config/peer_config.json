@@ -4,21 +4,28 @@
   },
   "counselor_peers": [
     {
-      "name": "conselheiro_1",
-      "ip": "192.168.1.102",
+      "name": "no_1",
+      "ip": "192.168.1.104",
       "port": 5000
     },
     {
-      "name": "conselheiro_2",
-      "ip": "192.168.1.102",
-      "port": 5000
+      "name": "no_2",
+      "ip": "192.168.1.104",
+      "port": 5001
+    },
+    {
+      "name": "no_3",
+      "ip": "192.168.1.104",
+      "port": 5002
     }
   ],
   "ml_config": {
-    "training_dataset_source": "C:\\Users\\giova\\Desktop\\Mestrado\\Rede de conselhos\\Dataset_IDS_UAV.csv",
-    "n_samples": 569,
-    "n_features": 31,
-    "n_classes": 3,
+    "target_column": "class",
+    "outlier_enabled": true,
+    "outlier_percentile": 97.0,
+    "train_eval_dataset_source": "Dataset_IDS_UAV.csv",
+    "final_test_dataset_source": "Dataset_IDS_UAV_TEST.csv",
+    "training_dataset_source": "Dataset_IDS_UAV.csv",
     "clustering_n_clusters": 5,
     "classifiers": [
       "DecisionTreeClassifier",
@@ -26,6 +33,13 @@
       "GaussianNB",
       "SVC"
     ],
-    "f1_threshold": 0.05
+    "eval_size": 0.30,
+    "random_state": 42,
+    "stratify": true,
+    "f1_threshold": 0.05,
+    "f1_min_required": 0.80,
+    "min_cluster_train_samples": 50,
+    "min_cluster_eval_samples": 20,
+    "min_samples_per_class_eval": 2
   }
 }
