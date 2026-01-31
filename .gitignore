@@ -1,3 +1,17 @@
 /.venv/
 /logs/
 /Dataset_IDS_UAV.csv
+/.idea/CounselorNode.iml
+/dataset500multiclass.csv
+/dataset500multiclass-poisoned.csv
+/dataset_01.csv
+/dataset_01_100_test.csv
+/dataset_01_400_train.csv
+/dataset_01_test.csv
+/dataset_02.csv
+/dataset_03.csv
+/Dataset_Completo_Multiclasse.csv
+/.idea/misc.xml
+/.idea/inspectionProfiles/profiles_settings.xml
+/.idea/vcs.xml
+/.idea/workspace.xml
