@@ -4,6 +4,7 @@ import numpy as np
 import json
 import threading
 import random  # Necessário para o client.request_counsel se usar random.choice
+import random
 
 # Importando camadas
 from infrastructure.config_manager import ConfigManager
@@ -55,6 +56,9 @@ class CounselorNode:
     def __init__(self, detected_ip, local_port=None):
         # 1. Configuração (Correto: Passando IP e Porta opcional)
         self.peer_manager = ConfigManager(detected_ip, local_port=local_port)
+    def __init__(self, detected_ip, poison_rate=0.0, delay=0):
+        # Componente 1: Configuração (Inicializado com o IP detectado)
+        self.peer_manager = ConfigManager(detected_ip)
         local_info = self.peer_manager.get_local_info()
 
         # 2. Informações lidas do config (Centralizado no peer_manager)
@@ -67,6 +71,19 @@ class CounselorNode:
         # 3. Logger
         self.logger = CounselorLogger(self.node_id, use_log_folder=True)
         print(f"Logger inicializado para o nó: {self.node_id}")
+        #Taxa de envenamento
+        self.poison_rate = poison_rate
+
+        #Tempo de início do envenamento
+        self.delay = delay
+        self.start_time = time.time()
+
+        # Componente 1.5: Logger
+        # --- CORREÇÃO AQUI ---
+        # A chamada agora passa 'use_log_folder=False' para salvar na RAIZ.
+        # O logger.py (acima) agora aceita este argumento.
+        self.logger = CounselorLogger(self.node_id, use_log_folder=False)
+        print(f"Logger inicializado. Logs serão salvos na raiz do projeto.")
 
         # 4. Motor ML
         ml_config = self.peer_manager.get_ml_config()
@@ -91,6 +108,26 @@ class CounselorNode:
     def start(self):
         """Inicia o servidor e mantém o nó ativo."""
         self.server.start_listening()
+
+    def _poisoning_active(self):
+        """Ativa o envenenamento após o atraso definido"""
+
+        if self.poison_rate <= 0:
+            return False
+        return (time.time() - self.start_time) >= self.delay
+
+    def _poison(self, decision: str):
+        """
+        Envenena ou não a decisão final ('NORMAL' ou 'INTRUSION')
+        """
+
+        if random.random() >= self.poison_rate:
+            return decision  # Não envenenado
+
+        print(f"[{self.node_id.upper()}] ⚠ *** CONSELHO ENVENENADO EMITIDO ***")
+
+        return "INTRUSION" if decision == "NORMAL" else "NORMAL" # Inverte a decisão
+
 
     def _execute_counseling_logic(self, sample_data_array, requester_id=None, requester_ip=None,
                                   ground_truth="N/A_from_peer", requester_chain=None):

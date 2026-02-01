@@ -1,0 +1,49 @@
+version: "3.9"
+
+services:
+  conselheiro_1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: conselheiro_1
+    hostname: conselheiro_1
+    command: >
+      python -u run_node.py 5000
+    networks:
+      rede_conselheiros:
+        ipv4_address: 172.20.0.2
+
+  conselheiro_2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: conselheiro_2
+    hostname: conselheiro_2
+    command: >
+      python -u run_node.py 5000
+      --poison-rate 1.0
+      --delay 30
+    networks:
+      rede_conselheiros:
+        ipv4_address: 172.20.0.3
+
+  conselheiro_3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: conselheiro_3
+    hostname: conselheiro_3
+    command: >
+      python -u run_node.py 5000
+      --poison-rate 0.5
+      --delay 100
+    networks:
+      rede_conselheiros:
+        ipv4_address: 172.20.0.4
+
+networks:
+  rede_conselheiros:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

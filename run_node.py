@@ -2,6 +2,7 @@ import time
 import numpy as np
 from core.node import CounselorNode
 from infrastructure.networking import detect_local_ip  # Importa a função de detecção
+import argparse
 
 
 # Função auxiliar para gerar amostras de teste consistentes
@@ -18,12 +19,43 @@ def generate_test_sample(engine):
     # Fallback
     return np.zeros(engine.config['n_features']), "N/A"
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Counselor Node")
+
+    parser.add_argument(
+        "port",
+        type=int,
+        help="Porta onde o nó irá escutar"
+    )
+
+    parser.add_argument(
+        "--poison-rate",
+        type=float,
+        default=0.0,
+        help="Taxa de envenenamento (0.0 a 1.0)"
+    )
+
+    parser.add_argument(
+    "--delay",
+    type=int,
+    default=0,
+    help="Tempo (em segundos) antes do nó começar a envenenar conselhos"
+)
+    return parser.parse_args()
+
 
 def main():
+    args = parse_args()
+
     # 1. Detecta o IP local
     local_ip = detect_local_ip()
     print(f"IP local detectado: {local_ip}")
     print("Iniciando nó conselheiro...")
+
+    if args.poison_rate > 0:
+        print(f"Nó malicioso iniciado com taxa de envenenamento de {args.poison_rate*100}% após {args.delay} segundos")
+    else:
+        print("Nó honesto iniciado (sem envenenamento)")
 
     try:
         # 2. Inicializa o nó usando o IP detectado como identificador
