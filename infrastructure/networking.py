@@ -238,8 +238,8 @@ class CounselorClient:
             print("--- CONSELHO RECEBIDO ---")
             print(f"Decisão do Conselheiro ({response['counselor_id']}): {log_decision}")
             print("--------------------------")
-            time.sleep(30)  # Espera entre as amostras
-            print("DANDO UMA CALMADINHA")
+            # time.sleep(30)  # Espera entre as amostras
+            # print("DANDO UMA CALMADINHA")
 
         except Exception as e:
             print(f"[CLIENTE] Erro na comunicação P2P com {peer_name}: {e}")

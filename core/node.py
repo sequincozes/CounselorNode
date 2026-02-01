@@ -53,12 +53,10 @@ class CounselorNode:
         print(f"[{self.node_id.upper()}] Aprendeu com conselho. label={label} counselor={counselor_id}")
 
 
-    def __init__(self, detected_ip, local_port=None):
-        # 1. Configuração (Correto: Passando IP e Porta opcional)
-        self.peer_manager = ConfigManager(detected_ip, local_port=local_port)
-    def __init__(self, detected_ip, poison_rate=0.0, delay=0):
+
+    def __init__(self, detected_ip, local_port=None, poison_rate=1, delay=0):
         # Componente 1: Configuração (Inicializado com o IP detectado)
-        self.peer_manager = ConfigManager(detected_ip)
+        self.peer_manager = ConfigManager(detected_ip, local_port=local_port)
         local_info = self.peer_manager.get_local_info()
 
         # 2. Informações lidas do config (Centralizado no peer_manager)
@@ -79,10 +77,7 @@ class CounselorNode:
         self.start_time = time.time()
 
         # Componente 1.5: Logger
-        # --- CORREÇÃO AQUI ---
-        # A chamada agora passa 'use_log_folder=False' para salvar na RAIZ.
-        # O logger.py (acima) agora aceita este argumento.
-        self.logger = CounselorLogger(self.node_id, use_log_folder=False)
+        self.logger = CounselorLogger(self.node_id, use_log_folder=True)
         print(f"Logger inicializado. Logs serão salvos na raiz do projeto.")
 
         # 4. Motor ML
@@ -111,7 +106,7 @@ class CounselorNode:
 
     def _poisoning_active(self):
         """Ativa o envenenamento após o atraso definido"""
-
+        print("POISONING ATIVADO!")
         if self.poison_rate <= 0:
             return False
         return (time.time() - self.start_time) >= self.delay
@@ -126,7 +121,7 @@ class CounselorNode:
 
         print(f"[{self.node_id.upper()}] ⚠ *** CONSELHO ENVENENADO EMITIDO ***")
 
-        return "INTRUSION" if decision == "NORMAL" else "NORMAL" # Inverte a decisão
+        return "FDI" if decision == "benign" else "benign" # Inverte a decisão
 
 
     def _execute_counseling_logic(self, sample_data_array, requester_id=None, requester_ip=None,
@@ -202,9 +197,11 @@ class CounselorNode:
             classification = results['classification']
             print(f"[{self.node_id.upper()}] (Conselheiro) Análise local sem conflito. Decisão: {classification}.")
 
-            # Mapeamento simples: se o motor retornou 'NORMAL', enviamos 'NORMAL', caso contrário 'INTRUSION'
-            # Nota: Você pode retornar a classe específica (ex: 'DoS') se o seu servidor tratar isso.
-            return classification#"NORMAL" if classification == 'benign' else "INTRUSION"
+            if self._poisoning_active():
+                classification = self._poison(classification)  # envenamento de decisão
+
+            return classification
+
 
     def check_traffic_and_act(self, sample_data_array, ground_truth):
         """

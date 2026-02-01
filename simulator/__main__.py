@@ -1,7 +1,13 @@
+import os
 import socket
+import sys
 import time
 import multiprocessing as mp
 import copy
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 
 from core.node import CounselorNode
@@ -61,12 +67,12 @@ ConfigManager.get_ml_config = _get_ml_config_with_override
 ConfigManager.get_other_peers = _get_other_peers_ip_port
 
 
-def node_process(ip, port, ml_override=None):
+def node_process(ip, port, ml_override=None, poison_rate=1, delay=0):
     try:
         if ml_override:
             ML_OVERRIDES_BY_PORT[port] = ml_override
 
-        node = CounselorNode(detected_ip=ip, local_port=port)
+        node = CounselorNode(detected_ip=ip, local_port=port, poison_rate=poison_rate, delay=delay)
         print(f"{Colors.OKBLUE}[SISTEMA] Nó {node.node_id} Online em {ip}:{port}{Colors.ENDC}")
 
         node.start()
@@ -164,8 +170,8 @@ def main():
             "f1_min_required": 0.80
         }),
         ("127.0.0.1", 5001, {
-            "train_eval_dataset_source": "dataset500multiclass-poisoned.csv",
-            "final_test_dataset_source": "dataset500multiclass-poisoned.csv",
+            "train_eval_dataset_source": "dataset500multiclass.csv",
+            "final_test_dataset_source": "dataset500multiclass.csv",
             "target_column": "class",
             "eval_size": 0.30,
             "clustering_n_clusters": 5,
@@ -174,8 +180,8 @@ def main():
             "outlier_enabled": True
         }),
         ("127.0.0.1", 5002, {
-            "train_eval_dataset_source": "dataset500multiclass-poisoned.csv",
-            "final_test_dataset_source": "dataset500multiclass-poisoned.csv",
+            "train_eval_dataset_source": "dataset500multiclass.csv",
+            "final_test_dataset_source": "dataset500multiclass.csv",
             "target_column": "class",
             "eval_size": 0.30,
             "clustering_n_clusters": 5,
@@ -188,8 +194,10 @@ def main():
     mp.set_start_method("spawn", force=True)
 
     procs = []
+    poison_rate = 1
+    delay = 0.0
     for ip, port, ml_override in nodes_config:
-        p = mp.Process(target=node_process, args=(ip, port, ml_override))
+        p = mp.Process(target=node_process, args=(ip, port, ml_override, poison_rate, delay))
         p.start()
         procs.append(p)
 
