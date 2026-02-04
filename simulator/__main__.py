@@ -161,8 +161,8 @@ def main():
 
     nodes_config = [
         ("127.0.0.1", 5000, {
-            "train_eval_dataset_source": "dataset_01_400_train.csv",
-            "final_test_dataset_source": "dataset_01_100_test.csv",
+            "train_eval_dataset_source": "datasets/sbrc/treino_no1.csv",
+            "final_test_dataset_source": "datasets/sbrc/zero_day.csv",
             "target_column": "class",
             "eval_size": 0.30,
             "clustering_n_clusters": 5,
@@ -170,8 +170,8 @@ def main():
             "f1_min_required": 0.80
         }),
         ("127.0.0.1", 5001, {
-            "train_eval_dataset_source": "dataset500multiclass.csv",
-            "final_test_dataset_source": "dataset500multiclass.csv",
+            "train_eval_dataset_source": "datasets/sbrc/no2.csv",
+            "final_test_dataset_source": "datasets/sbrc/no2.csv",
             "target_column": "class",
             "eval_size": 0.30,
             "clustering_n_clusters": 5,
@@ -180,8 +180,8 @@ def main():
             "outlier_enabled": True
         }),
         ("127.0.0.1", 5002, {
-            "train_eval_dataset_source": "dataset500multiclass.csv",
-            "final_test_dataset_source": "dataset500multiclass.csv",
+            "train_eval_dataset_source": "datasets/sbrc/no3.csv",
+            "final_test_dataset_source": "datasets/sbrc/no3.csv",
             "target_column": "class",
             "eval_size": 0.30,
             "clustering_n_clusters": 5,
@@ -225,9 +225,11 @@ def main():
 
     sample_source = "final_test"
     sample_index = 0
+    X_src, _, _ = _pick_source(engine, sample_source)
+    max_samples = len(X_src)
 
     try:
-        while True:
+        while sample_index < max_samples:
             resultado, used_index, sample_raw, ground_truth, conflict = run_trigger_with_instances(
                 peer_manager=peer_manager,
                 node_id=node_id,
@@ -250,6 +252,11 @@ def main():
                 )
 
                 print(f"Amostra #{used_index} | Conselho: {learned_label} (de {counselor_id})")
+
+                # >>> NOVO LOG (decisões) <<<
+                decisao_final = learned_label if learned_label is not None else "UNKNOWN"
+                responsavel = counselor_id
+                logger.log_decisao(ground_truth, decisao_final, responsavel)
 
                 if learned_label is not None and learned_label not in ["UNKNOWN", "LOOP_CLOSED"]:
                     # Aprende
@@ -279,6 +286,11 @@ def main():
             else:
                 # Sem conselho
                 print(f"Amostra #{used_index} | Decisão Local: {Colors.BOLD}{resultado}{Colors.ENDC}")
+
+                decisao_final = str(resultado)
+                responsavel = "local"
+                logger.log_decisao(ground_truth, decisao_final, responsavel)
+
                 long_rows = engine.get_long_f1_rows(
                     rodada=used_index,
                     sample_raw=sample_raw,
@@ -291,7 +303,7 @@ def main():
             X_src, _, _ = _pick_source(engine, sample_source)
             sample_index = (used_index + 1) % len(X_src)
 
-            time.sleep(5)
+            # time.sleep(5)
 
     except KeyboardInterrupt:
         print(f"\n{Colors.FAIL}[!] Encerrando simulação...{Colors.ENDC}")
