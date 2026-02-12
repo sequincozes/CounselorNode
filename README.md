@@ -4,7 +4,7 @@
 
 ### ✔️ Overview
 
-CounselorNode is a fully decentralized peer-to-peer (P2P) implementation of a node from a Counselors Network (CN) for collaborative Intrusion Detection Systems (IDS).  
+CounselorNode is a fully decentralized peer-to-peer (P2P) implementation of a node from a Counselors Network (CN) for collaborative Intrusion Detection Systems (IDS).
 
 Each node performs local classification using **Dynamic Classifier Selection (DCS)** and requests labeled advice from peers only when local decisions are unreliable due to conflict.
 
@@ -14,19 +14,18 @@ The tool supports recursive advice exchange, cycle-closure detection, and event 
 
 ## 📚 Index
 
-- [Architecture](#-architecture)
-- [Test Environment](#-test-environment)
-- [Requirements](#-requirements)
-- [Installation](#-installation)
-- [Execution](#-execution)
-- [Configuration](#-configuration)
-- [Multi-Node Deployment Example](#-multi-node-deployment-example)
-- [🇧🇷 PT Version](#-pt)
-
+- [Architecture](#architecture)
+- [Test Environment](#test-environment)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Execution](#execution)
+- [Configuration](#configuration)
+- [Multi-Node Deployment Example](#multi-node-deployment-example)
+- [🇧🇷 PT](#pt)
 
 ---
 
-
+<a id="architecture"></a>
 ## 🏗️ Architecture
 
 The project is organized into four main modules:
@@ -51,7 +50,7 @@ counselornode/
 **CounselorNode**
 - Executes local classification
 - Triggers recursive advice requests
-- Handles forwarding-node tracking
+- Maintains a forwarding-node list to prevent cyclic requests
 - Detects loop closure
 
 **Networking Layer**
@@ -61,6 +60,7 @@ counselornode/
 
 ---
 
+<a id="test-environment"></a>
 ## 🖥️ Test Environment
 
 The tool was tested under the following configurations:
@@ -74,6 +74,7 @@ The tool was tested under the following configurations:
 
 ---
 
+<a id="requirements"></a>
 ## 📝 Requirements
 
 CounselorNode is implemented in Python.
@@ -90,6 +91,7 @@ requirements.txt
 
 ---
 
+<a id="installation"></a>
 ## ⚙️ Installation
 
 Clone the repository:
@@ -99,7 +101,7 @@ git clone https://github.com/sequincozes/CounselorNode.git
 cd CounselorNode
 ```
 
-Create and activate a virtual environment (optional):
+Create and activate a virtual environment (optional but recommended):
 
 ### Linux / macOS
 
@@ -119,6 +121,7 @@ pip install -r requirements.txt
 
 ---
 
+<a id="execution"></a>
 ## ▶️ Execution
 
 To start a single node:
@@ -137,6 +140,7 @@ Ctrl + C
 
 ---
 
+<a id="configuration"></a>
 ## ⚙️ Configuration
 
 Each node is configured via:
@@ -159,6 +163,7 @@ This enables reproducible and parameterized experiments.
 
 ---
 
+<a id="multi-node-deployment-example"></a>
 ## 🔗 Multi-Node Deployment Example
 
 To simulate a Counselors Network locally, open three terminals:
@@ -186,6 +191,7 @@ During execution, logs will display:
 
 ---
 
+<a id="pt"></a>
 # 🇧🇷 PT
 
 ## ✔️ Visão Geral
@@ -205,15 +211,17 @@ A ferramenta implementa:
 
 ## 📚 Índice
 
-- [Arquitetura](#-arquitetura)
-- [Ambiente de testes](#-ambiente-de-testes)
-- [Requerimentos](#-requerimentos)
-- [Instalação](#-instalação)
-- [Execução](#-execução)
-- [Configuração](#-configuração)
-- [Execução com 3 Nós](#-execução-com-3-nós)
+- [Arquitetura](#arquitetura-pt)
+- [Ambiente de testes](#ambiente-testes-pt)
+- [Requerimentos](#requerimentos-pt)
+- [Instalação](#instalacao-pt)
+- [Execução](#execucao-pt)
+- [Configuração](#configuracao-pt)
+- [Execução com 3 Nós](#multi-node-pt)
 
+---
 
+<a id="arquitetura-pt"></a>
 ## 🏗️ Arquitetura
 
 Estrutura principal:
@@ -225,12 +233,10 @@ infrastructure/    # Comunicação e logs
 run_node.py        # Execução via linha de comando
 ```
 
----
-
 ### Componentes principais
 
 **ClassifierEngine**
-- Clusterização K-Means 
+- Clusterização K-Means
 - Seleção Dinâmica de Classificadores (Decision Tree, KNN, SVM por padrão)
 - Detecção de conflitos
 - Detecção de outliers
@@ -238,16 +244,17 @@ run_node.py        # Execução via linha de comando
 **CounselorNode**
 - Executa classificação local
 - Aciona requisição recursiva de conselhos
-- Gerencia a cadeia de encaminhamento dos conselhos
-- Detecta fechamento de loops
+- Mantém lista de nós já consultados para evitar ciclos
+- Detecta fechamento de loop
 
 **Networking Layer**
 - Comunicação TCP socket
-- Trocas de requisão/resposta de conselhos
+- Troca de requisição/resposta de conselhos
 - Controle do encaminhamento recursivo
 
 ---
 
+<a id="ambiente-testes-pt"></a>
 ## 🖥️ Ambiente de testes
 
 A ferramenta foi testada nas seguintes configurações:
@@ -261,6 +268,7 @@ A ferramenta foi testada nas seguintes configurações:
 
 ---
 
+<a id="requerimentos-pt"></a>
 ## 📝 Requerimentos
 
 CounselorNode é implementado em Python.
@@ -277,6 +285,7 @@ requirements.txt
 
 ---
 
+<a id="instalacao-pt"></a>
 ## ⚙️ Instalação
 
 Clone o repositório:
@@ -306,6 +315,7 @@ pip install -r requirements.txt
 
 ---
 
+<a id="execucao-pt"></a>
 ## ▶️ Execução
 
 Para iniciar um nó:
@@ -316,6 +326,7 @@ python run_node.py 5000
 
 ---
 
+<a id="configuracao-pt"></a>
 ## ⚙️ Configuração
 
 Arquivo:
@@ -333,6 +344,7 @@ Permite definir:
 
 ---
 
+<a id="multi-node-pt"></a>
 ## 🔗 Execução com 3 Nós
 
 Execute em três terminais diferentes:
@@ -352,10 +364,8 @@ Certifique-se de que cada nó esteja configurado com os demais como peers.
 
 Durante a execução, os logs irão mostrar:
 
-- Decisões Locais
+- Decisões locais
 - Detecção de conflitos
 - Requisições de conselhos
 - Encaminhamento recursivo
 - Eventos de fechamento de loop
-
----
