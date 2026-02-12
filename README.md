@@ -14,16 +14,18 @@ The tool supports recursive advice exchange, cycle-closure detection, and event 
 
 ## 📚 Index
 
-- [Architecture](#architecture)
-- [Test Environment](#test-environment)
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Execution](#execution)
-- [Configuration](#configuration)
-- [Multi-Node Deployment Example](#multi-node-deployment-example)
-- [🇧🇷 Versão em Português](#-versão-em-português)
+- [Architecture](#-architecture)
+- [Test Environment](#-test-environment)
+- [Requirements](#-requirements)
+- [Installation](#-installation)
+- [Execution](#-execution)
+- [Configuration](#-configuration)
+- [Multi-Node Deployment Example](#-multi-node-deployment-example)
+- [🇧🇷 PT Version](#-pt)
+
 
 ---
+
 
 ## 🏗️ Architecture
 
@@ -122,7 +124,7 @@ pip install -r requirements.txt
 To start a single node:
 
 ```
-python -m counselornode.run_node 5000
+python -m run_node.py 5000
 ```
 
 Where `5000` is the TCP port used by the node.
@@ -163,13 +165,13 @@ To simulate a Counselors Network locally, open three terminals:
 
 ```
 Terminal 1:
-python -m counselornode.run_node 5000
+python run_node.py 5000
 
 Terminal 2:
-python -m counselornode.run_node 5001
+python run_node.py 5001
 
 Terminal 3:
-python -m counselornode.run_node 5002
+python run_node.py 5002
 ```
 
 Ensure that each node’s `peer_config.json` includes the other peers.
@@ -200,6 +202,17 @@ A ferramenta implementa:
 - Instrumentação de eventos
 
 ---
+
+## 📚 Índice
+
+- [Arquitetura](#-arquitetura)
+- [Ambiente de testes](#-ambiente-de-testes)
+- [Requerimentos](#-requerimentos)
+- [Instalação](#-instalação)
+- [Execução](#-execução)
+- [Configuração](#-configuração)
+- [Execução com 3 Nós](#-execução-com-3-nós)
+
 
 ## 🏗️ Arquitetura
 
@@ -298,7 +311,7 @@ pip install -r requirements.txt
 Para iniciar um nó:
 
 ```
-python -m counselornode.run_node 5000
+python run_node.py 5000
 ```
 
 ---
@@ -325,9 +338,14 @@ Permite definir:
 Execute em três terminais diferentes:
 
 ```
-python -m counselornode.run_node 5000
-python -m counselornode.run_node 5001
-python -m counselornode.run_node 5002
+Terminal 1:
+python run_node.py 5000
+
+Terminal 2:
+python run_node.py 5001
+
+Terminal 3:
+python run_node.py 5002
 ```
 
 Certifique-se de que cada nó esteja configurado com os demais como peers.
