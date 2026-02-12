@@ -1,6 +1,6 @@
 # 🌐 CounselorNode 🌐
 
-## 🇺🇸 EN
+#### 🇺🇸 EN
 
 ### ✔️ Overview
 
@@ -192,7 +192,7 @@ During execution, logs will display:
 ---
 
 <a id="pt"></a>
-# 🇧🇷 PT
+#### 🇧🇷 PT
 
 ## ✔️ Visão Geral
 
