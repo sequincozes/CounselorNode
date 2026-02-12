@@ -43,7 +43,7 @@ counselornode/
 
 **ClassifierEngine**
 - K-Means clustering
-- Dynamic Classifier Selection (Decision Tree, KNN, SVM by default)
+- Dynamic Classifier Selection (Decision Tree, KNN, SVM and Naive Bayes by default)
 - Conflict detection
 - Outlier detection
 
@@ -127,7 +127,7 @@ pip install -r requirements.txt
 To start a single node:
 
 ```
-python -m run_node.py 5000
+python -m counselornode.run_node 5000
 ```
 
 Where `5000` is the TCP port used by the node.
@@ -170,13 +170,13 @@ To simulate a Counselors Network locally, open three terminals:
 
 ```
 Terminal 1:
-python run_node.py 5000
+python -m counselornode.run_node 5000
 
 Terminal 2:
-python run_node.py 5001
+python -m counselornode.run_node 5001
 
 Terminal 3:
-python run_node.py 5002
+python -m counselornode.run_node 5002
 ```
 
 Ensure that each node’s `peer_config.json` includes the other peers.
@@ -237,7 +237,7 @@ run_node.py        # Execução via linha de comando
 
 **ClassifierEngine**
 - Clusterização K-Means
-- Seleção Dinâmica de Classificadores (Decision Tree, KNN, SVM por padrão)
+- Seleção Dinâmica de Classificadores (Decision Tree, KNN, SVM e Naive Bayes por padrão)
 - Detecção de conflitos
 - Detecção de outliers
 
@@ -321,7 +321,7 @@ pip install -r requirements.txt
 Para iniciar um nó:
 
 ```
-python run_node.py 5000
+python -m counselornode.run_node 5000
 ```
 
 ---
@@ -351,13 +351,13 @@ Execute em três terminais diferentes:
 
 ```
 Terminal 1:
-python run_node.py 5000
+python -m counselornode.run_node 5000
 
 Terminal 2:
-python run_node.py 5001
+python -m counselornode.run_node 5001
 
 Terminal 3:
-python run_node.py 5002
+python -m counselornode.run_node 5002
 ```
 
 Certifique-se de que cada nó esteja configurado com os demais como peers.
