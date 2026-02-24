@@ -195,7 +195,7 @@ class CounselorClient:
         # 1. FIXANDO SEED PARA REPRODUTIBILIDADE
         import random
         # Usamos um seed fixo para garantir que o simulador escolha sempre o mesmo par no teste
-        random.seed(42)
+        # random.seed(42)
         target_peer = random.choice(other_peers)
 
         peer_ip = target_peer['ip']
