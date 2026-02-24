@@ -195,7 +195,7 @@ class CounselorClient:
         # 1. FIXANDO SEED PARA REPRODUTIBILIDADE
         import random
         # Usamos um seed fixo para garantir que o simulador escolha sempre o mesmo par no teste
-        random.seed(42)
+        # random.seed(42)
         target_peer = random.choice(other_peers)
 
         peer_ip = target_peer['ip']
@@ -238,6 +238,8 @@ class CounselorClient:
             print("--- CONSELHO RECEBIDO ---")
             print(f"Decisão do Conselheiro ({response['counselor_id']}): {log_decision}")
             print("--------------------------")
+            # time.sleep(30)  # Espera entre as amostras
+            # print("DANDO UMA CALMADINHA")
 
         except Exception as e:
             print(f"[CLIENTE] Erro na comunicação P2P com {peer_name}: {e}")

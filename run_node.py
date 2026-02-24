@@ -4,6 +4,7 @@ from core.node import CounselorNode
 from infrastructure.networking import detect_local_ip  # Importa a função de detecção
 import argparse
 
+
 # Função auxiliar para gerar amostras de teste consistentes
 def generate_test_sample(engine):
     """
@@ -20,7 +21,7 @@ def generate_test_sample(engine):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Counselor Node")
-    
+
     parser.add_argument(
         "port",
         type=int,
@@ -42,6 +43,7 @@ def parse_args():
 )
     return parser.parse_args()
 
+
 def main():
     args = parse_args()
 
@@ -57,7 +59,7 @@ def main():
 
     try:
         # 2. Inicializa o nó usando o IP detectado como identificador
-        node = CounselorNode(local_ip, poison_rate=args.poison_rate, delay=args.delay)
+        node = CounselorNode(local_ip)
         print("Vai chamar o node.start...")
 
         node.start()

@@ -63,17 +63,20 @@ class ClassifierEngine:
         # RAW
         self.X_train_raw = None
         self.X_eval_raw = None
-        self.X_final_test_raw = None
+        # self.X_final_test_raw = None
+        self.X_test_raw = None
 
         # SCALED
         self.X_train = None
         self.X_eval = None
-        self.X_final_test = None
+        # self.X_final_test = None
+        self.X_test = None
 
         # Labels
         self.y_train = None
         self.y_eval = None
-        self.y_final_test = None
+        # self.y_final_test = None
+        self.y_test = None
 
         # Models & clustering
         self.scaler = None

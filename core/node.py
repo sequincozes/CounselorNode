@@ -4,6 +4,7 @@ import numpy as np
 import json
 import threading
 import random  # Necessário para o client.request_counsel se usar random.choice
+import random
 
 # Importando camadas
 from infrastructure.config_manager import ConfigManager
@@ -52,8 +53,9 @@ class CounselorNode:
         print(f"[{self.node_id.upper()}] Aprendeu com conselho. label={label} counselor={counselor_id}")
 
 
-    def __init__(self, detected_ip, local_port=None, poison_rate=0.0, delay=0):
-        # 1. Configuração (Correto: Passando IP e Porta opcional)
+
+    def __init__(self, detected_ip, local_port=None, poison_rate=1, delay=0):
+        # Componente 1: Configuração (Inicializado com o IP detectado)
         self.peer_manager = ConfigManager(detected_ip, local_port=local_port)
         local_info = self.peer_manager.get_local_info()
 
@@ -67,6 +69,16 @@ class CounselorNode:
         # 3. Logger
         self.logger = CounselorLogger(self.node_id, use_log_folder=True)
         print(f"Logger inicializado para o nó: {self.node_id}")
+        #Taxa de envenamento
+        self.poison_rate = poison_rate
+
+        #Tempo de início do envenamento
+        self.delay = delay
+        self.start_time = time.time()
+
+        # Componente 1.5: Logger
+        self.logger = CounselorLogger(self.node_id, use_log_folder=True)
+        print(f"Logger inicializado. Logs serão salvos na raiz do projeto.")
 
         # 4. Motor ML
         ml_config = self.peer_manager.get_ml_config()
@@ -85,11 +97,6 @@ class CounselorNode:
             self.peer_manager
         )
 
-        # 7. Poisoning
-        self.poison_rate = poison_rate
-        self.delay = delay
-        self.start_time = time.time()
-
         print(f"--- {self.node_id.upper()} INICIADO ---")
         print(f"Endereço de Escuta: {self.bind_host}:{self.port}")
 
@@ -97,14 +104,14 @@ class CounselorNode:
         """Inicia o servidor e mantém o nó ativo."""
         self.server.start_listening()
 
-    def poisoning_active(self):
+    def _poisoning_active(self):
         """Ativa o envenenamento após o atraso definido"""
-        
+        print("POISONING ATIVADO!")
         if self.poison_rate <= 0:
             return False
         return (time.time() - self.start_time) >= self.delay
-    
-    def poison(self, decision: str):
+
+    def _poison(self, decision: str):
         """
         Envenena ou não a decisão final ('NORMAL' ou 'INTRUSION')
         """
@@ -114,7 +121,7 @@ class CounselorNode:
 
         print(f"[{self.node_id.upper()}] ⚠ *** CONSELHO ENVENENADO EMITIDO ***")
 
-        return "INTRUSION" if decision == "NORMAL" else "NORMAL" # Inverte a decisão
+        return "FDI" if decision == "benign" else "benign" # Inverte a decisão
 
 
     def _execute_counseling_logic(self, sample_data_array, requester_id=None, requester_ip=None,
@@ -190,12 +197,11 @@ class CounselorNode:
             classification = results['classification']
             print(f"[{self.node_id.upper()}] (Conselheiro) Análise local sem conflito. Decisão: {classification}.")
 
-           # if self.poisoning_active():
-            #    classification = self.poison(classification) "AVERIGUANDO LÓGICA"
+            if self._poisoning_active():
+                classification = self._poison(classification)  # envenamento de decisão
 
-            # Mapeamento simples: se o motor retornou 'NORMAL', enviamos 'NORMAL', caso contrário 'INTRUSION'
-            # Nota: Você pode retornar a classe específica (ex: 'DoS') se o seu servidor tratar isso.
-            return classification#"NORMAL" if classification == 'benign' else "INTRUSION"
+            return classification
+
 
     def check_traffic_and_act(self, sample_data_array, ground_truth):
         """

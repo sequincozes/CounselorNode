@@ -5,17 +5,17 @@
   "counselor_peers": [
     {
       "name": "no_1",
-      "ip": "192.168.1.104",
+      "ip": "10.2.143.186",
       "port": 5000
     },
     {
       "name": "no_2",
-      "ip": "192.168.1.104",
+      "ip": "127.0.0.1",
       "port": 5001
     },
     {
       "name": "no_3",
-      "ip": "192.168.1.104",
+      "ip": "127.0.0.1",
       "port": 5002
     }
   ],
@@ -23,9 +23,8 @@
     "target_column": "class",
     "outlier_enabled": true,
     "outlier_percentile": 97.0,
-    "train_eval_dataset_source": "Dataset_IDS_UAV.csv",
-    "final_test_dataset_source": "Dataset_IDS_UAV_TEST.csv",
-    "training_dataset_source": "Dataset_IDS_UAV.csv",
+    "train_eval_dataset_source": "data_sbrc2026/treino_no1.csv",
+    "final_test_dataset_source": "data_sbrc2026/teste_no1 (zero days).csv",
     "clustering_n_clusters": 5,
     "classifiers": [
       "DecisionTreeClassifier",
@@ -40,6 +39,7 @@
     "f1_min_required": 0.80,
     "min_cluster_train_samples": 50,
     "min_cluster_eval_samples": 20,
-    "min_samples_per_class_eval": 2
+    "min_samples_per_class_eval": 2,
+    "n_features": 25
   }
 }

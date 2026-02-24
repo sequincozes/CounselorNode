@@ -1,14 +1,20 @@
+import os
 import socket
+import sys
 import time
 import multiprocessing as mp
 import copy
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 
 from core.node import CounselorNode
 from infrastructure.config_manager import ConfigManager
 from infrastructure.logger import CounselorLogger
 from infrastructure.networking import CounselorClient
 from core.classifier_engine import ClassifierEngine
-
 
 class Colors:
     HEADER = '\033[95m'
@@ -61,12 +67,12 @@ ConfigManager.get_ml_config = _get_ml_config_with_override
 ConfigManager.get_other_peers = _get_other_peers_ip_port
 
 
-def node_process(ip, port, ml_override=None):
+def node_process(ip, port, ml_override=None, poison_rate=1, delay=0):
     try:
         if ml_override:
             ML_OVERRIDES_BY_PORT[port] = ml_override
 
-        node = CounselorNode(detected_ip=ip, local_port=port)
+        node = CounselorNode(detected_ip=ip, local_port=port, poison_rate=poison_rate, delay=delay)
         print(f"{Colors.OKBLUE}[SISTEMA] Nó {node.node_id} Online em {ip}:{port}{Colors.ENDC}")
 
         node.start()
@@ -155,8 +161,8 @@ def main():
 
     nodes_config = [
         ("127.0.0.1", 5000, {
-            "train_eval_dataset_source": "dataset_01_400_train.csv",
-            "final_test_dataset_source": "dataset_01_100_test.csv",
+            "train_eval_dataset_source": "data_sbrc2026/treino_no1.csv",
+            "final_test_dataset_source": "data_sbrc2026/teste_no1 (zero days).csv",
             "target_column": "class",
             "eval_size": 0.30,
             "clustering_n_clusters": 5,
@@ -164,8 +170,8 @@ def main():
             "f1_min_required": 0.80
         }),
         ("127.0.0.1", 5001, {
-            "train_eval_dataset_source": "dataset500multiclass-poisoned.csv",
-            "final_test_dataset_source": "dataset500multiclass-poisoned.csv",
+            "train_eval_dataset_source": "data_sbrc2026/no2.csv",
+            "final_test_dataset_source": "data_sbrc2026/no2.csv",
             "target_column": "class",
             "eval_size": 0.30,
             "clustering_n_clusters": 5,
@@ -174,8 +180,8 @@ def main():
             "outlier_enabled": True
         }),
         ("127.0.0.1", 5002, {
-            "train_eval_dataset_source": "dataset500multiclass-poisoned.csv",
-            "final_test_dataset_source": "dataset500multiclass-poisoned.csv",
+            "train_eval_dataset_source": "data_sbrc2026/no3.csv",
+            "final_test_dataset_source": "data_sbrc2026/no3.csv",
             "target_column": "class",
             "eval_size": 0.30,
             "clustering_n_clusters": 5,
@@ -188,8 +194,10 @@ def main():
     mp.set_start_method("spawn", force=True)
 
     procs = []
+    poison_rate = 1
+    delay = 0.0
     for ip, port, ml_override in nodes_config:
-        p = mp.Process(target=node_process, args=(ip, port, ml_override))
+        p = mp.Process(target=node_process, args=(ip, port, ml_override, poison_rate, delay))
         p.start()
         procs.append(p)
 
@@ -217,9 +225,11 @@ def main():
 
     sample_source = "final_test"
     sample_index = 0
+    X_src, _, _ = _pick_source(engine, sample_source)
+    max_samples = len(X_src)
 
     try:
-        while True:
+        while sample_index < max_samples:
             resultado, used_index, sample_raw, ground_truth, conflict = run_trigger_with_instances(
                 peer_manager=peer_manager,
                 node_id=node_id,
@@ -242,6 +252,11 @@ def main():
                 )
 
                 print(f"Amostra #{used_index} | Conselho: {learned_label} (de {counselor_id})")
+
+                # >>> NOVO LOG (decisões) <<<
+                decisao_final = learned_label if learned_label is not None else "UNKNOWN"
+                responsavel = counselor_id
+                logger.log_decisao(ground_truth, decisao_final, responsavel)
 
                 if learned_label is not None and learned_label not in ["UNKNOWN", "LOOP_CLOSED"]:
                     # Aprende
@@ -271,6 +286,11 @@ def main():
             else:
                 # Sem conselho
                 print(f"Amostra #{used_index} | Decisão Local: {Colors.BOLD}{resultado}{Colors.ENDC}")
+
+                decisao_final = str(resultado)
+                responsavel = "local"
+                logger.log_decisao(ground_truth, decisao_final, responsavel)
+
                 long_rows = engine.get_long_f1_rows(
                     rodada=used_index,
                     sample_raw=sample_raw,
@@ -283,7 +303,7 @@ def main():
             X_src, _, _ = _pick_source(engine, sample_source)
             sample_index = (used_index + 1) % len(X_src)
 
-            time.sleep(5)
+            # time.sleep(5)
 
     except KeyboardInterrupt:
         print(f"\n{Colors.FAIL}[!] Encerrando simulação...{Colors.ENDC}")
