@@ -161,8 +161,8 @@ def main():
 
     nodes_config = [
         ("127.0.0.1", 5000, {
-            "train_eval_dataset_source": "datasets/sbrc/treino_no1.csv",
-            "final_test_dataset_source": "datasets/sbrc/zero_day.csv",
+            "train_eval_dataset_source": "data_sbrc2026/treino_no1.csv",
+            "final_test_dataset_source": "data_sbrc2026/teste_no1 (zero days).csv",
             "target_column": "class",
             "eval_size": 0.30,
             "clustering_n_clusters": 5,
@@ -170,8 +170,8 @@ def main():
             "f1_min_required": 0.80
         }),
         ("127.0.0.1", 5001, {
-            "train_eval_dataset_source": "datasets/sbrc/no2.csv",
-            "final_test_dataset_source": "datasets/sbrc/no2.csv",
+            "train_eval_dataset_source": "data_sbrc2026/no2.csv",
+            "final_test_dataset_source": "data_sbrc2026/no2.csv",
             "target_column": "class",
             "eval_size": 0.30,
             "clustering_n_clusters": 5,
@@ -180,8 +180,8 @@ def main():
             "outlier_enabled": True
         }),
         ("127.0.0.1", 5002, {
-            "train_eval_dataset_source": "datasets/sbrc/no3.csv",
-            "final_test_dataset_source": "datasets/sbrc/no3.csv",
+            "train_eval_dataset_source": "data_sbrc2026/no3.csv",
+            "final_test_dataset_source": "data_sbrc2026/no3.csv",
             "target_column": "class",
             "eval_size": 0.30,
             "clustering_n_clusters": 5,
