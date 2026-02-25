@@ -18,7 +18,8 @@ The tool supports recursive advice exchange, cycle-closure detection, and event 
 - [Test Environment](#test-environment)
 - [Requirements](#requirements)
 - [Installation](#installation)
-- [Execution](#execution)
+- [Fast Execution (simulation)](#fast_execution)
+- [Docker Execution](#docker_execution)
 - [Configuration](#configuration)
 - [Multi-Node Deployment Example](#multi-node-deployment-example)
 - [🇧🇷 PT](#pt)
@@ -120,9 +121,19 @@ pip install -r requirements.txt
 ```
 
 ---
+<a id="fast_execution"></a>
+## ▶️ Fast Execution (simulation)
 
-<a id="execution"></a>
-## ▶️ Execution
+To start 3 nodes into a single host for fast simulation, run the following command in cmd from the root project directory:
+```
+python run_simulation.py
+```
+
+All parameters can be set up through the [simulator/__main__.py](https://github.com/sequincozes/CounselorNode/blob/main/simulator/__main__.py).
+
+
+<a id="docker_execution"></a>
+## ▶️ Complete Execution (Docker Containers)
 
 To start a single node:
 
