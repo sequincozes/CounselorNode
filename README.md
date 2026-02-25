@@ -1,6 +1,6 @@
 # 🌐 CounselorNode 🌐
 
-#### 🇺🇸 EN
+#### EN 🇺🇸 
 
 ### ✔️ Overview
 
@@ -18,10 +18,8 @@ The tool supports recursive advice exchange, cycle-closure detection, and event 
 - [Test Environment](#test-environment)
 - [Requirements](#requirements)
 - [Installation](#installation)
-- [Fast Execution (simulation)](#fast_execution)
-- [Docker Execution](#docker_execution)
+- [Execution](#execution)
 - [Configuration](#configuration)
-- [Multi-Node Deployment Example](#multi-node-deployment-example)
 - [🇧🇷 PT](#pt)
 
 ---
@@ -83,6 +81,7 @@ CounselorNode is implemented in Python.
 | Dependency | Recommended Version |
 |------------|--------------------|
 | Python | 3.9+ |
+| Docker (optional) | 28.1.1+ |
 
 Libraries are listed in:
 
@@ -121,8 +120,18 @@ pip install -r requirements.txt
 ```
 
 ---
-<a id="fast_execution"></a>
-## ▶️ Fast Execution (simulation)
+<a id="execution"></a>
+## ▶️ Execution
+
+During execution, logs will display:
+
+- Local decisions
+- Conflict detection
+- Advice requests
+- Recursive forwarding
+- Loop closure events
+
+### Fast Execution (simulation)
 
 To start 3 nodes into a single host for fast simulation, run the following command in cmd from the root project directory:
 ```
@@ -131,25 +140,19 @@ python run_simulation.py
 
 All parameters can be set up through the [simulator/\__main\__.py](https://github.com/sequincozes/CounselorNode/blob/main/simulator/__main__.py).
 
+### Docker Execution
 
-<a id="docker_execution"></a>
-## ▶️ Complete Execution (Docker Containers)
-
-To start a single node:
+With Docker engine running, run following command in terminal from the root project directory to build the containers:
 
 ```
-python -m counselornode.run_node 5000
+docker compose build
 ```
 
-Where `5000` is the TCP port used by the node.
-
-Stop execution with:
+To run the containers and see the logs in terminal, run the command:
 
 ```
-Ctrl + C
+docker compose up
 ```
-
----
 
 <a id="configuration"></a>
 ## ⚙️ Configuration
@@ -174,36 +177,8 @@ This enables reproducible and parameterized experiments.
 
 ---
 
-<a id="multi-node-deployment-example"></a>
-## 🔗 Multi-Node Deployment Example
-
-To simulate a Counselors Network locally, open three terminals:
-
-```
-Terminal 1:
-python -m counselornode.run_node 5000
-
-Terminal 2:
-python -m counselornode.run_node 5001
-
-Terminal 3:
-python -m counselornode.run_node 5002
-```
-
-Ensure that each node’s `peer_config.json` includes the other peers.
-
-During execution, logs will display:
-
-- Local decisions
-- Conflict detection
-- Advice requests
-- Recursive forwarding
-- Loop closure events
-
----
-
 <a id="pt"></a>
-#### 🇧🇷 PT
+#### PT 🇧🇷 
 
 ## ✔️ Visão Geral
 
@@ -228,7 +203,6 @@ A ferramenta implementa:
 - [Instalação](#instalacao-pt)
 - [Execução](#execucao-pt)
 - [Configuração](#configuracao-pt)
-- [Execução com 3 Nós](#multi-node-pt)
 
 ---
 
@@ -287,6 +261,7 @@ CounselorNode é implementado em Python.
 | Dependência | Versão Recomendada |
 |------------|--------------------|
 | Python | 3.9+ |
+| Docker (opcional) | 28.1.1+ |
 
 As bibliotecas estão listadas em:
 
@@ -329,13 +304,37 @@ pip install -r requirements.txt
 <a id="execucao-pt"></a>
 ## ▶️ Execução
 
-Para iniciar um nó:
+Durante a execução, os logs irão mostrar:
+
+- Decisões locais
+- Detecção de conflitos
+- Requisições de conselhos
+- Encaminhamento recursivo
+- Eventos de fechamento de loop
+
+### Execução Rápida (simulation)
+
+Para executar 3 nós em um único terminal para simulação rápida, execute o seguinte comando no terminal a partir pasta raiz do diretório:
 
 ```
-python -m counselornode.run_node 5000
+python run_simulation.py
 ```
 
----
+Todos os parâmetros podem ser editados através de [simulator/\__main\__.py](https://github.com/sequincozes/CounselorNode/blob/main/simulator/__main__.py).
+
+### Execução via Docker
+
+Com a Docker engine rodando, execute o seguinte comando no terminal a partir da pasta raiz do diretório para a criação dos containers:
+
+```
+docker compose build
+```
+
+Para executar os containers e ver os logs no terminal, execute o comando:
+
+```
+docker compose up
+```
 
 <a id="configuracao-pt"></a>
 ## ⚙️ Configuração
@@ -352,31 +351,3 @@ Permite definir:
 - Lista de peers
 - Classificadores
 - Limiares de decisão
-
----
-
-<a id="multi-node-pt"></a>
-## 🔗 Execução com 3 Nós
-
-Execute em três terminais diferentes:
-
-```
-Terminal 1:
-python -m counselornode.run_node 5000
-
-Terminal 2:
-python -m counselornode.run_node 5001
-
-Terminal 3:
-python -m counselornode.run_node 5002
-```
-
-Certifique-se de que cada nó esteja configurado com os demais como peers.
-
-Durante a execução, os logs irão mostrar:
-
-- Decisões locais
-- Detecção de conflitos
-- Requisições de conselhos
-- Encaminhamento recursivo
-- Eventos de fechamento de loop
