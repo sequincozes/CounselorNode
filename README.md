@@ -129,7 +129,7 @@ To start 3 nodes into a single host for fast simulation, run the following comma
 python run_simulation.py
 ```
 
-All parameters can be set up through the [simulator/__main__.py](https://github.com/sequincozes/CounselorNode/blob/main/simulator/__main__.py).
+All parameters can be set up through the [simulator/\__main\__.py](https://github.com/sequincozes/CounselorNode/blob/main/simulator/__main__.py).
 
 
 <a id="docker_execution"></a>
