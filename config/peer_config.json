@@ -5,26 +5,26 @@
   "counselor_peers": [
     {
       "name": "no_1",
-      "ip": "10.2.143.186",
+      "ip": "172.20.0.2",
       "port": 5000
     },
     {
       "name": "no_2",
-      "ip": "127.0.0.1",
-      "port": 5001
+      "ip": "172.20.0.3",
+      "port": 5000
     },
     {
       "name": "no_3",
-      "ip": "127.0.0.1",
-      "port": 5002
+      "ip": "172.20.0.4",
+      "port": 5000
     }
   ],
   "ml_config": {
     "target_column": "class",
     "outlier_enabled": true,
     "outlier_percentile": 97.0,
-    "train_eval_dataset_source": "data_sbrc2026/treino_no1.csv",
-    "final_test_dataset_source": "data_sbrc2026/teste_no1 (zero days).csv",
+    "train_eval_dataset_source": "treino_no1.csv",
+    "final_test_dataset_source": "teste_no1.csv",
     "clustering_n_clusters": 5,
     "classifiers": [
       "DecisionTreeClassifier",
