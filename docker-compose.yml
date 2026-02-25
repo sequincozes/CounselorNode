@@ -1,0 +1,42 @@
+version: "3.9"
+
+services:
+  conselheiro_1:
+    build: .
+    container_name: conselheiro_1
+    command: python -u run_node.py 5000
+    volumes:
+      - ./data_sbrc2026/treino_no1.csv:/app/data_sbrc2026/treino_no1.csv
+      - ./data_sbrc2026/teste_no1.csv:/app/data_sbrc2026/teste_no1.csv
+    networks:
+      rede_conselheiros:
+        ipv4_address: 172.20.0.2
+
+  conselheiro_2:
+    build: .
+    container_name: conselheiro_2
+    command: python -u run_node.py 5000
+    volumes:
+      - ./data_sbrc2026/no2.csv:/app/data_sbrc2026/no2.csv
+      - ./data_sbrc2026/teste_no1.csv:/app/data_sbrc2026/teste_no1.csv
+    networks:
+      rede_conselheiros:
+        ipv4_address: 172.20.0.3
+
+  conselheiro_3:
+    build: .
+    container_name: conselheiro_3
+    command: python -u run_node.py 5000
+    volumes:
+      - ./data_sbrc2026/no3.csv:/app/data_sbrc2026/no3.csv
+      - ./data_sbrc2026/teste_no1.csv:/app/data_sbrc2026/teste_no1.csv
+    networks:
+      rede_conselheiros:
+        ipv4_address: 172.20.0.4
+
+networks:
+  rede_conselheiros:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
