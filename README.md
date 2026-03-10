@@ -151,7 +151,7 @@ During execution, logs will display:
 
 To start 3 nodes into a single host for fast simulation, run the following command in cmd from the root project directory:
 ```
-python run_simulation.py
+python simulator/_main_.py.
 ```
 
 All parameters can be set up through the [simulator/\__main\__.py](https://github.com/sequincozes/CounselorNode/blob/main/simulator/__main__.py).
