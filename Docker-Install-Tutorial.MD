@@ -44,4 +44,4 @@ Isso irá:
 
 # 3️⃣ Iniciar Docker
 
-Depois da instalação, abra o Docker Desktop e continue do passo [Docker Execution](https://github.com/sequincozes/CounselorNode/blob/main/README.md)
+Depois da instalação, abra o Docker Desktop e continue do passo [Docker Execution](https://github.com/sequincozes/CounselorNode/blob/main/README.md#docker-execution)
