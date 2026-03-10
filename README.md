@@ -112,7 +112,7 @@ sudo apt update
 sudo apt install python3 python3-pip python3-venv
 ```
 
-After Python is installed:
+After Python is installed, run in the terminal:
 
 ```
 python3 -m venv .venv
@@ -120,7 +120,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Windows
+### Windows (PowerShell)
 
 [Optional] If Python is not installed, you can run:
 
