@@ -105,6 +105,15 @@ Create and activate a virtual environment (optional but recommended):
 
 ### Linux / macOS
 
+[Optional] If Python is not installed, you can run:
+
+```
+sudo apt update
+sudo apt install python3 python3-pip python3-venv
+```
+
+After Python is installed:
+
 ```
 python3 -m venv .venv
 source .venv/bin/activate
@@ -113,6 +122,13 @@ pip install -r requirements.txt
 
 ### Windows
 
+[Optional] If Python is not installed, you can run:
+
+```
+winget install Python.Python.3
+```
+
+After Python is installed:
 ```
 python -m venv .venv
 .venv\Scripts\activate
