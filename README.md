@@ -297,9 +297,18 @@ git clone https://github.com/sequincozes/CounselorNode.git
 cd CounselorNode
 ```
 
-Crie um ambiente virtual (opcional):
+Crie e ative um ambiente virtual (opcional, mas recomendado):
 
 ### Linux / macOS
+
+[Opcional] Se o Python não estiver instalado, você pode executar:
+
+```
+sudo apt update
+sudo apt install python3 python3-pip python3-venv
+```
+
+Após instalar o Python, execute no terminal:
 
 ```
 python3 -m venv .venv
@@ -307,7 +316,15 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Windows
+### Windows (PowerShell)
+
+[Opcional] Se o Python não estiver instalado, você pode executar:
+
+```
+winget install Python.Python.3
+```
+
+Após instalar o Python:
 
 ```
 python -m venv .venv
@@ -320,33 +337,34 @@ pip install -r requirements.txt
 <a id="execucao-pt"></a>
 ## ▶️ Execução
 
-Durante a execução, os logs irão mostrar:
+Durante a execução, os logs irão exibir:
 
-- Decisões locais
-- Detecção de conflitos
-- Requisições de conselhos
-- Encaminhamento recursivo
-- Eventos de fechamento de loop
+- Decisões locais  
+- Detecção de conflitos  
+- Solicitações de conselho  
+- Encaminhamento recursivo  
+- Eventos de fechamento de loop  
 
-### Execução Rápida (simulation)
+### Execução Rápida (simulação)
 
-Para executar 3 nós em um único terminal para simulação rápida, execute o seguinte comando no terminal a partir pasta raiz do diretório:
+Para iniciar 3 nós em um único host para uma simulação rápida, execute o seguinte comando no terminal (na raiz do projeto):
 
 ```
-python run_simulation.py
+python simulator/__main__.py
 ```
 
-Todos os parâmetros podem ser editados através de [simulator/\__main\__.py](https://github.com/sequincozes/CounselorNode/blob/main/simulator/__main__.py).
+Todos os parâmetros podem ser configurados em:
+https://github.com/sequincozes/CounselorNode/blob/main/simulator/__main__.py
 
-### Execução via Docker
+### Execução com Docker
 
-Com a Docker engine rodando, execute o seguinte comando no terminal a partir da pasta raiz do diretório para a criação dos containers:
+Com o Docker em execução, execute o seguinte comando no terminal (na raiz do projeto) para construir os containers:
 
 ```
 docker compose build
 ```
 
-Para executar os containers e ver os logs no terminal, execute o comando:
+Para iniciar os containers e visualizar os logs no terminal, execute:
 
 ```
 docker compose up
