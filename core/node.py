@@ -16,6 +16,14 @@ from core.classifier_engine import ClassifierEngine
 class CounselorNode:
     """A classe principal que representa o IDS (Detector) na Counselors Network."""
 
+     # --- FILTRO DE LABELS INVÁLIDAS ---
+    INVALID_LABELS = {
+        "ERROR_CLASSIFICATION",
+        "ERROR",
+        "UNKNOWN",
+        None
+    }
+    
     def learn_with_advice(self, sample_raw, label, counselor_id="UNKNOWN"):
         """
         Aprendizado online:
@@ -197,8 +205,8 @@ class CounselorNode:
             classification = results['classification']
             print(f"[{self.node_id.upper()}] (Conselheiro) Análise local sem conflito. Decisão: {classification}.")
 
-            if self._poisoning_active():
-                classification = self._poison(classification)  # envenamento de decisão
+            # if self._poisoning_active():
+            #     classification = self._poison(classification)  # envenamento de decisão
 
             return classification
 
@@ -284,8 +292,9 @@ class CounselorNode:
             if counsel_response and isinstance(counsel_response, dict):
                 counselor_id = counsel_response.get("counselor_id", "UNKNOWN")
 
-            print(f"Aprendendo com nova amostra de {final_decision}: {sample_data_array}")
-            self.learn_with_advice(sample_data_array, final_decision, counselor_id=counselor_id)
+            if final_decision not in self.INVALID_LABELS:    
+                print(f"Aprendendo com nova amostra de {final_decision}: {sample_data_array}")
+                self.learn_with_advice(sample_data_array, final_decision, counselor_id=counselor_id)
 
             return final_decision
 
