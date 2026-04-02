@@ -162,7 +162,7 @@ def main():
     nodes_config = [
         ("127.0.0.1", 5000, {
             "train_eval_dataset_source": "data_sbrc2026/treino_no1.csv",
-            "final_test_dataset_source": "data_sbrc2026/teste_no1 (zero days).csv",
+            "final_test_dataset_source": "data_sbrc2026/teste_no1.csv",
             "target_column": "class",
             "eval_size": 0.30,
             "clustering_n_clusters": 5,
@@ -301,10 +301,14 @@ def main():
 
             # Próxima amostra
             X_src, _, _ = _pick_source(engine, sample_source)
-            sample_index = (used_index + 1) % len(X_src)
+            sample_index += 1
 
+            print(f"{Colors.OKBLUE}[PROGRESSO] Amostra {sample_index}/{max_samples} concluída.{Colors.ENDC}")
             # time.sleep(5)
 
+        print(f"\n{Colors.OKGREEN}=== SIMULAÇÃO CONCLUÍDA COM SUCESSO ==={Colors.ENDC}")
+        print(f"{Colors.OKGREEN}Todas as {max_samples} amostras foram processadas.{Colors.ENDC}")
+        
     except KeyboardInterrupt:
         print(f"\n{Colors.FAIL}[!] Encerrando simulação...{Colors.ENDC}")
     finally:
