@@ -1,6 +1,6 @@
 ## ConselourNode: Uma Implementação P2P de uma Counselors Network para Sistemas Colaborativos de Detecção de Intrusão
 
-O CounselorNode é uma implementação peer-to-peer (P2P) de uma Counselors Network (CN) que utiliza por padrão 3 nós para Sistemas Colaborativos de Detecção de Intrusão (IDS). Cada nó realiza classificação local utilizando **Seleção Dinâmica de Classificadores (DCS)** e solicita conselhos aos pares apenas quando a decisão local apresenta conflitos. Para experimentos foi também implementada uma função de envenenamento de conselho com base na taxa de envenenamento (poison rate) definida.
+O CounselorNode é uma implementação peer-to-peer (P2P) de uma Counselors Network (CN) que utiliza por padrão 3 nós para Sistemas Colaborativos de Detecção de Intrusão (IDS), ferramenta essa utilizada no trabalho Ataques de Envenenamento de Rótulos contra a Detecção de Zero-Day em Sistemas de Detecção de Intrusão Colaborativos. Cada nó realiza classificação local utilizando **Seleção Dinâmica de Classificadores (DCS)** e solicita conselhos aos pares apenas quando a decisão local apresenta conflitos. Para experimentos foi também implementada uma função de envenenamento de conselho com base na taxa de envenenamento (poison rate) definida.
 
 A ferramenta implementa:
 
