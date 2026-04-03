@@ -194,7 +194,7 @@ def main():
     mp.set_start_method("spawn", force=True)
 
     procs = []
-    poison_rate = 1
+    poison_rate = 0
     delay = 0.0
     for ip, port, ml_override in nodes_config:
         p = mp.Process(target=node_process, args=(ip, port, ml_override, poison_rate, delay))
