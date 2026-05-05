@@ -3,71 +3,31 @@ import time
 import numpy as np
 import json
 import threading
-import random  # Necessário para o client.request_counsel se usar random.choice
 import random
 
-# Importando camadas
+# Importando camadas (Atualizado para refletir o novo modelo Gossip)
 from infrastructure.config_manager import ConfigManager
-from infrastructure.networking import CounselorServer, CounselorClient
+from infrastructure.networking import GossipServer, GossipClient
 from infrastructure.logger import CounselorLogger
 from core.classifier_engine import ClassifierEngine
 
+class GossipNode:
+    """A classe principal que representa o IDS (Detector) na rede de Gossip Learning."""
 
-class CounselorNode:
-    """A classe principal que representa o IDS (Detector) na Counselors Network."""
-
-     # --- FILTRO DE LABELS INVÁLIDAS ---
+    # --- FILTRO DE LABELS INVÁLIDAS ---
     INVALID_LABELS = {
         "ERROR_CLASSIFICATION",
         "ERROR",
         "UNKNOWN",
         None
     }
-    
-    def learn_with_advice(self, sample_raw, label, counselor_id="UNKNOWN"):
-        """
-        Aprendizado online:
-        - adiciona a amostra RAW no TRAIN_RAW
-        - re-treina pipeline (rebuild)
-        - escreve log de F1 por cluster após a atualização
-        """
-        # Garante shape 1D (n_features,)
-        sample_raw = np.asarray(sample_raw, dtype=float).reshape(-1)
-
-        # 1) adiciona no RAW (não no escalado!)
-        if hasattr(self.engine, "add_training_sample_raw"):
-            self.engine.add_training_sample_raw(sample_raw, label, retrain=False)
-        else:
-            # fallback (menos recomendado): atualiza X_train_raw manualmente
-            x = sample_raw.reshape(1, -1)
-            self.engine.X_train_raw = np.vstack([self.engine.X_train_raw, x])
-            self.engine.y_train = np.append(self.engine.y_train, label)
-
-        # 2) refaz todo o pipeline
-        self.engine.rebuild()
-
-        # 3) snapshot de F1 por cluster e log
-        if hasattr(self.engine, "get_cluster_f1_snapshot_rows"):
-            rows = self.engine.get_cluster_f1_snapshot_rows()
-            if hasattr(self.logger, "log_cluster_f1_snapshot"):
-                self.logger.log_cluster_f1_snapshot(
-                    node_id=self.node_id,
-                    rows=rows,
-                    event="ADVICE_LEARN",
-                    sample_label=str(label),
-                    counselor_id=str(counselor_id)
-                )
-
-        print(f"[{self.node_id.upper()}] Aprendeu com conselho. label={label} counselor={counselor_id}")
-
-
 
     def __init__(self, detected_ip, local_port=None, poison_rate=1, delay=0):
-        # Componente 1: Configuração (Inicializado com o IP detectado)
+        # 1. Configuração (Inicializado com o IP detectado)
         self.peer_manager = ConfigManager(detected_ip, local_port=local_port)
         local_info = self.peer_manager.get_local_info()
 
-        # 2. Informações lidas do config (Centralizado no peer_manager)
+        # 2. Informações do nó
         self.node_id = self.peer_manager.node_id
         self.port = self.peer_manager.local_port
         self.local_ip = detected_ip
@@ -76,231 +36,198 @@ class CounselorNode:
 
         # 3. Logger
         self.logger = CounselorLogger(self.node_id, use_log_folder=True)
-        print(f"Logger inicializado para o nó: {self.node_id}")
-        #Taxa de envenamento
-        self.poison_rate = poison_rate
+        print(f"[{self.node_id.upper()}] Logger inicializado. Logs salvos na pasta padrão.")
 
-        #Tempo de início do envenamento
+        # 4. Configurações de Envenenamento (Malicious Node)
+        self.poison_rate = poison_rate
         self.delay = delay
         self.start_time = time.time()
 
-        # Componente 1.5: Logger
-        self.logger = CounselorLogger(self.node_id, use_log_folder=True)
-        print(f"Logger inicializado. Logs serão salvos na raiz do projeto.")
-
-        # 4. Motor ML
+        # 5. Motor ML (Machine Learning)
         ml_config = self.peer_manager.get_ml_config()
         self.engine = ClassifierEngine(ml_config)
 
-        # 5. Cliente de Rede
-        self.client = CounselorClient(self.node_id, self.peer_manager, self.logger)
-
-        # 6. Servidor de Rede (Usando a porta correta vinda do config)
-        self.server = CounselorServer(
+        # 6. Módulos de Rede Gossip
+        self.client = GossipClient(self.node_id, self.peer_manager, self.logger)
+        self.server = GossipServer(
             self.bind_host,
             self.port,
             self.node_id,
-            self._execute_counseling_logic,
+            self._execute_gossip_logic, # Callback para quando receber fofoca
             self.logger,
             self.peer_manager
         )
 
-        print(f"--- {self.node_id.upper()} INICIADO ---")
+        # 7. Configurações do Loop de Gossip
+        self.gossip_active = True
+        self.gossip_interval = 2 # Frequência de fofoca (em segundos)
+        self.gossip_thread = threading.Thread(target=self._gossip_loop, daemon=True)
+
+        # 8. Controle de Amostras Processadas (para parada automática)
+        self.processed_samples = set()  # Índices das amostras já processadas
+        self.all_samples_processed = False  # Flag para indicar quando todas foram processadas
+
+        print(f"--- {self.node_id.upper()} (GOSSIP NODE) INICIADO ---")
         print(f"Endereço de Escuta: {self.bind_host}:{self.port}")
 
     def start(self):
-        """Inicia o servidor e mantém o nó ativo."""
+        """Inicia o servidor UDP/TCP e a thread de disseminação de gossip."""
         self.server.start_listening()
+        self.gossip_thread.start()
+        print(f"[{self.node_id.upper()}] Disseminação de Gossip ativada (Intervalo: {self.gossip_interval}s).")
+
+    # ==========================================
+    # LÓGICA DE ENVENENAMENTO (POISONING)
+    # ==========================================
 
     def _poisoning_active(self):
         """Ativa o envenenamento após o atraso definido"""
-        print("POISONING ATIVADO!")
         if self.poison_rate <= 0:
             return False
         return (time.time() - self.start_time) >= self.delay
 
     def _poison(self, decision: str):
-        """
-        Envenena ou não a decisão final ('NORMAL' ou 'INTRUSION')
-        """
-
+        """Envenena ou não a decisão final (Inverte BENIGN <-> FDI/INTRUSION)"""
         if random.random() >= self.poison_rate:
-            return decision  # Não envenenado
+            return decision  # Escapa do envenenamento pela probabilidade
 
-        print(f"[{self.node_id.upper()}] ⚠ *** CONSELHO ENVENENADO EMITIDO ***")
+        print(f"[{self.node_id.upper()}] ⚠ *** ATAQUE: CLASSIFICAÇÃO ENVENENADA ***")
+        return "FDI" if decision == "benign" else "benign"
 
-        return "FDI" if decision == "benign" else "benign" # Inverte a decisão
 
+    # ==========================================
+    # LÓGICA DE GOSSIP LEARNING (REDE ASSÍNCRONA)
+    # ==========================================
 
-    def _execute_counseling_logic(self, sample_data_array, requester_id=None, requester_ip=None,
-                                  ground_truth="N/A_from_peer", requester_chain=None):
+    def _gossip_loop(self):
+        """Loop contínuo que envia conhecimento para vizinhos aleatórios periodicamente."""
+        while self.gossip_active:
+            time.sleep(self.gossip_interval)
+            
+            # 1. Busca vizinhos disponíveis
+            peers = self.peer_manager.get_other_peers()
+            if not peers:
+                continue
+                
+            # 2. Escolhe um vizinho aleatoriamente
+            target_peer = random.choice(peers)
+            
+            # 3. Prepara os dados para enviar (ex: últimas amostras rotuladas)
+            knowledge_package = self._prepare_knowledge_package()
+            
+            if knowledge_package:
+                self.client.send_gossip(target_peer, knowledge_package)
+
+    def _prepare_knowledge_package(self):
+        """Retorna um dicionário com as últimas amostras aprendidas para compartilhar."""
+        # Verificamos se o motor já tem dados de treino
+        if hasattr(self.engine, 'y_train') and len(self.engine.y_train) > 0:
+            # Pega as últimas 5 amostras que o nó processou
+            n_samples = min(5, len(self.engine.y_train))
+            return {
+                "samples": self.engine.X_train_raw[-n_samples:].tolist(),
+                "labels": self.engine.y_train[-n_samples:].tolist()
+            }
+        return None
+
+    def _execute_gossip_logic(self, incoming_package):
         """
-        Função de callback executada quando este nó recebe um pedido de aconselhamento.
-        Implementa a lógica de conselho em cascata usando IP:PORTA para evitar loops.
+        Callback executado pelo Servidor quando recebe um pacote Gossip de outro nó.
+        Faz o "merge" do conhecimento externo no modelo local.
         """
-        # 1. Identificação única deste nó (IP:Porta) para a cadeia
-        local_info = self.peer_manager.get_local_info()
-        my_identity = f"{local_info.get('ip')}:{local_info.get('port')}"
+        samples = incoming_package.get("samples", [])
+        labels = incoming_package.get("labels", [])
+        origin = incoming_package.get("node_origin", "UNKNOWN")
 
-        print(f"\n[{self.node_id.upper()}] (Conselheiro) Recebeu pedido de {requester_id} ({requester_ip}).")
+        if not samples:
+            return
 
-        # 2. Inicializa e atualiza a cadeia de requisição
-        if requester_chain is None:
-            requester_chain = []
+        print(f"[{self.node_id.upper()}] Integrou {len(samples)} amostras vindas do nó {origin}.")
 
-        # Se o requester_ip e porta (de quem chamou) não estiverem na cadeia, poderiam ser adicionados,
-        # mas o padrão é adicionar a si mesmo antes de passar adiante.
-        current_chain = requester_chain + [my_identity]
+        # Adiciona as amostras ao motor
+        for s, l in zip(samples, labels):
+            if l not in self.INVALID_LABELS:
+                sample_raw = np.asarray(s, dtype=float).reshape(-1)
+                # Retrain=False para não reconstruir o modelo a cada única amostra
+                self.engine.add_training_sample_raw(sample_raw, l, retrain=False)
 
-        print(f"[{self.node_id.upper()}] (Conselheiro) Cadeia de requisição atual: {current_chain}")
+        # Ao final do lote recebido, reconstrói/treina o pipeline uma única vez
+        self.engine.rebuild()
 
-        # 3. Executa a lógica de conflito local
-        results = self.engine.classify_and_check_conflict(sample_data_array)
-        conflict = results['conflict']
 
-        # 4. Caso haja conflito interno no conselheiro, ele busca um terceiro nó
-        if conflict:
-            print(
-                f"[{self.node_id.upper()}] (Conselheiro) CONFLITO INTERNO ao aconselhar {requester_id}. Buscando ajuda externa...")
+    # ==========================================
+    # CONTROLE DE AMOSTRAS PROCESSADAS
+    # ==========================================
 
-            # 5. Filtra pares: EXCLUI nós que já estão na cadeia (comparando IP:Porta)
-            all_peers = self.peer_manager.get_other_peers()
+    def generate_next_sample(self):
+        """
+        Gera a próxima amostra não processada do conjunto de teste.
+        Retorna None quando todas as amostras foram processadas.
+        """
+        # Tenta usar o CSV B (Final Test) primeiro
+        if hasattr(self.engine, 'X_final_test_raw') and self.engine.X_final_test_raw is not None and len(self.engine.X_final_test_raw) > 0:
+            total_samples = len(self.engine.X_final_test_raw)
+            available_indices = [i for i in range(total_samples) if i not in self.processed_samples]
 
-            peers_to_ask = [
-                p for p in all_peers
-                if f"{p['ip']}:{p['port']}" not in current_chain
-            ]
+            if not available_indices:
+                # Todas as amostras foram processadas
+                self.all_samples_processed = True
+                print(f"[{self.node_id.upper()}] ✅ TODAS AS {total_samples} AMOSTRAS DO DATASET FORAM PROCESSADAS!")
+                return None, None
 
-            # LÓGICA DE LOOP CLOSED: Se não houver ninguém novo para perguntar
-            if not peers_to_ask:
-                print(
-                    f"[{self.node_id.upper()}] (Conselheiro) ALERTA: Loop Fechado! Todos os pares IP:Porta já consultados. Retornando LOOP_CLOSED.")
-                return "LOOP_CLOSED"
+            # Seleciona a próxima amostra (ordem sequencial)
+            idx = available_indices[0]
+            self.processed_samples.add(idx)
+            return self.engine.X_final_test_raw[idx], self.engine.y_final_test[idx]
 
-            # 6. Pede conselho ao próximo par disponível
-            counsel_response = self.client.request_counsel(
-                sample_data_array,
-                peers_to_ask,
-                ground_truth,
-                current_chain  # Passa a cadeia atualizada com este nó incluso
-            )
+        # Fallback: Se não tiver CSV B configurado, usa o EVAL (CSV A)
+        elif hasattr(self.engine, 'X_eval_raw') and self.engine.X_eval_raw is not None and len(self.engine.X_eval_raw) > 0:
+            total_samples = len(self.engine.X_eval_raw)
+            available_indices = [i for i in range(total_samples) if i not in self.processed_samples]
 
-            # 7. Trata a resposta do terceiro nó
-            if counsel_response:
-                decision = counsel_response.get('decision')
+            if not available_indices:
+                # Todas as amostras foram processadas
+                self.all_samples_processed = True
+                print(f"[{self.node_id.upper()}] ✅ TODAS AS {total_samples} AMOSTRAS DO DATASET FORAM PROCESSADAS!")
+                return None, None
 
-                # Se o próximo nó falhou ou também detectou loop, propagamos o LOOP_CLOSED
-                if decision in ['LOOP_CLOSED', 'ERROR_CONNECTION', 'ERROR_TIMEOUT', 'ERROR_CONNECTION_REFUSED']:
-                    print(
-                        f"[{self.node_id.upper()}] (Conselheiro) Próximo peer reportou falha/loop. Propagando LOOP_CLOSED.")
-                    return "LOOP_CLOSED"
+            # Seleciona a próxima amostra (ordem sequencial)
+            idx = available_indices[0]
+            self.processed_samples.add(idx)
+            return self.engine.X_eval_raw[idx], self.engine.y_eval[idx]
 
-                print(f"[{self.node_id.upper()}] (Conselheiro) Segundo conselho confirmou {decision}.")
-                return decision
+        # Fallback extremo caso o motor não tenha carregado nada
+        print(f"[{self.node_id.upper()}] ⚠ AVISO: Nenhum dataset de teste encontrado!")
+        return None, None
 
-            return "LOOP_CLOSED"  # Fallback se não houver resposta
 
-        # 8. Se NÃO HÁ conflito local (Decisão de alta confiança do conselheiro)
-        else:
-            classification = results['classification']
-            print(f"[{self.node_id.upper()}] (Conselheiro) Análise local sem conflito. Decisão: {classification}.")
-
-            if self._poisoning_active():
-                classification = self._poison(classification)  # envenamento de decisão
-
-            return classification
-
+    # ==========================================
+    # LÓGICA DE DETECÇÃO DE TRÁFEGO (INFERÊNCIA)
+    # ==========================================
 
     def check_traffic_and_act(self, sample_data_array, ground_truth):
         """
-        Processa uma amostra de tráfego local e verifica por conflito.
-        Inicia a cadeia de requisição se um conflito for detectado.
+        No Gossip, o fluxo de inferência é puramente local e muito mais rápido.
+        A "sabedoria da rede" já está embutida nos pesos do motor via _execute_gossip_logic.
         """
-        # print(f"\n[{self.node_id.upper()}] Analisando amostra (primeiras 25 features): {sample_data_array[:25]}...")
-        print(f"[{self.node_id.upper()}] (Ground Truth para esta amostra: {ground_truth})")
+        print(f"[{self.node_id.upper()}] Analisando amostra (Ground Truth: {ground_truth})")
 
-        # 1. Classifica e verifica por conflito usando o motor DCS
+        # 1. Faz a inferência usando o motor local (que está constantemente aprendendo com a rede)
         results = self.engine.classify_and_check_conflict(sample_data_array)
+        
+        # Como não existe mais a espera por "conselho", usamos a melhor predição do modelo local
+        # O classifier_engine no Gossip geralmente deve retornar a decisão majoritária do ensemble.
+        best_model_class = self.engine.counseling_logic(sample_data_array)
+        final_decision = best_model_class
 
-        classification = results['classification']
-        conflict = results['conflict']
-        decisions = results['decisions']
-        cluster_id = results.get('cluster_id', 'N/A')
+        # 2. Verifica se o nó atual está atuando como malicioso
+        if self._poisoning_active():
+            final_decision = self._poison(final_decision)
 
-        print(f"[{self.node_id.upper()}] Resultado DCS Local (Cluster {cluster_id}): {classification}")
-        print(f"[{self.node_id.upper()}] Decisões Locais (Classes): {decisions}")
+        # 3. Aprende com a própria amostra recém-classificada (Online Learning Pessoal)
+        if final_decision not in self.INVALID_LABELS:
+            self.engine.add_training_sample_raw(sample_data_array, final_decision, retrain=True)
 
-        # 2. Lógica de Gatilho da Rede de Conselheiros
-        if conflict:
-            print(
-                f"[{self.node_id.upper()}] Alerta: CONFLITO DE CLASSIFICADOR DETECTADO! Consultando a Counselors Network.")
-
-            # --- NOVO: Inicializa a cadeia de IPs consultados ---
-            local_ip = self.peer_manager.get_local_info().get('ip')
-            initial_chain = [local_ip]
-
-            # Busca outros pares para consultar (exclui a si mesmo)
-            other_peers = self.peer_manager.get_other_peers()
-
-            if not other_peers:
-                print(
-                    f"[{self.node_id.upper()}] Ação: Conflito detectado, mas não há outros pares. Usando decisão local padrão.")
-                # Retorna a decisão local de desempate
-                best_model_class = self.engine.counseling_logic(sample_data_array)
-                final_decision = best_model_class  # "INTRUSION" if best_model_class != 'benign' else "NORMAL"
-                return final_decision
-
-            # O cliente seleciona um par aleatório da lista 'other_peers'
-            counsel_response = self.client.request_counsel(
-                sample_data_array,
-                other_peers,
-                ground_truth,
-                initial_chain  # Passa a cadeia inicial
-            )
-
-            if counsel_response:
-                counsel_decision = counsel_response.get('decision')
-            else:
-                counsel_decision = None  # Falha de conexão inicial
-
-            if counsel_decision == 'LOOP_CLOSED':
-                # --- NOVO: Lógica de Resolução de Loop Fechado ---
-                print(
-                    f"[{self.node_id.upper()}] Ação: LOOP_CLOSED detectado. Usando o classificador local de maior confiança...")
-
-                # 3. Usa a lógica de alta confiança (melhor modelo) do ClassifierEngine para desempate
-                best_model_class = self.engine.counseling_logic(sample_data_array)
-                final_decision = best_model_class  # "INTRUSION" if best_model_class != 'benign' else "NORMAL"
-
-                print(
-                    f"[{self.node_id.upper()}] WARNING: Decisão final: {final_decision} (Melhor Classificador Local). Classe: {best_model_class}")
-                # ------------------------------------------------
-
-            # elif counsel_decision == 'INTRUSION':
-            #     final_decision = "INTRUSION"
-            #     print(
-            #         f"[{self.node_id.upper()}] Ação: Decisão Final: {final_decision} (Confirmado por {counsel_response['counselor_id']}).")
-
-            else:
-                final_decision = counsel_decision  # "NORMAL"  # Resposta padrão se o conselho não for intrusão/loop
-                print(
-                    f"[{self.node_id.upper()}] Ação: Decisão Final: {final_decision}"
-                    f" (Confirmado por {counsel_response['counselor_id']})."
-                )
-
-            counselor_id = "UNKNOWN"
-            if counsel_response and isinstance(counsel_response, dict):
-                counselor_id = counsel_response.get("counselor_id", "UNKNOWN")
-
-            if final_decision not in self.INVALID_LABELS:    
-                print(f"Aprendendo com nova amostra de {final_decision}: {sample_data_array}")
-                self.learn_with_advice(sample_data_array, final_decision, counselor_id=counselor_id)
-
-            return final_decision
-
-        else:
-            # Se não há conflito, usamos a decisão local
-            final_decision = classification  # "INTRUSION" if classification != 'benign' else "NORMAL"
-            print(
-                f"[{self.node_id.upper()}] Classificação Local: Sem conflito detectado. Decisão Final: {final_decision}.")
-            return final_decision
+        print(f"[{self.node_id.upper()}] Decisão Final (Gossip-driven): {final_decision}")
+        
+        return final_decision

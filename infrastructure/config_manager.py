@@ -17,7 +17,7 @@ class ConfigManager:
         self.local_port = local_port  # Armazena a porta desejada
 
         self.peers = self.config.get('counselor_peers', [])
-        self.ml_config = self.config.get('ml_config', {})
+        # Removido: self.ml_config = self.config.get('ml_config', {}) - agora é por nó
 
         # NOVA LÓGICA: Se passar porta, usa IP + Porta. Se não, usa só IP.
         if local_port:
@@ -75,11 +75,21 @@ class ConfigManager:
         return self.local_info
 
     def get_ml_config(self):
-        """Retorna o dicionário de configuração de Machine Learning."""
-        return self.ml_config
+        """Retorna o dicionário de configuração de Machine Learning específico do nó."""
+        # Busca a configuração ML específica do nó local
+        node_ml_config = self.local_info.get('ml_config', {})
+
+        # Fallback para configuração global se não houver configuração específica do nó
+        if not node_ml_config:
+            node_ml_config = self.config.get('ml_config', {})
+
+        return node_ml_config
 
     def get_other_peers(self):
         """Encontra todos os pares que NÃO são este nó local."""
-        # Filtra com base na combinação de IP e Porta
-        return [p for p in self.peers if p['ip'] != self.local_ip ]
+        # Filtra com base na combinação de IP e porta para suportar múltiplos nós no mesmo host.
+        return [
+            p for p in self.peers
+            if not (p['ip'] == self.local_ip and p['port'] == self.local_port)
+        ]
 

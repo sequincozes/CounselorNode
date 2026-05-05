@@ -1,266 +1,198 @@
 import json
 import socket
 import threading
-import numpy as np
 import time
 import os
 import sys
 
-BUFFER_SIZE = 1024
-
+# Aumentamos o buffer, pois pacotes de fofoca (várias amostras) 
+# podem ser maiores que um pedido de conselho único (1024 bytes).
+BUFFER_SIZE = 8192 
 
 def detect_local_ip():
     """
     Tenta encontrar o IP local "principal" da máquina na rede.
-    Usa um truque comum de criar um socket e conectar-se a um IP externo.
+    Para desenvolvimento local, retorna 127.0.0.1 para compatibilidade com peer_config.json
     """
     s = None
     try:
-        # Conecta a um IP externo (não envia dados)
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(0)
         s.connect(('8.8.8.8', 80))
         ip = s.getsockname()[0]
+        # Para desenvolvimento local, sempre usar 127.0.0.1
+        if ip.startswith('192.168.') or ip.startswith('10.') or ip.startswith('172.'):
+            ip = '127.0.0.1'
     except Exception:
-        ip = '127.0.0.1'  # Fallback para localhost
+        ip = '127.0.0.1'
     finally:
         if s:
             s.close()
     return ip
 
+class GossipServer:
+    """Implementa o servidor que escuta pacotes de conhecimento (Gossip) P2P."""
 
-class CounselorServer:
-    """Implementa o servidor que escuta por pedidos de aconselhamento P2P."""
-
-    def __init__(self, host, port, node_id, counseling_fn, logger, peer_manager):
-        self.host = host  # Será '0.0.0.0'
+    def __init__(self, host, port, node_id, gossip_integration_fn, logger, peer_manager):
+        self.host = host
         self.port = port
         self.node_id = node_id
-        # counseling_fn é o _execute_counseling_logic do node.py
-        self.counseling_logic_fn = counseling_fn
+        # Agora o callback não devolve uma decisão, apenas recebe os dados para aprender
+        self.gossip_integration_fn = gossip_integration_fn 
         self.is_running = False
 
         self.logger = logger
         self.peer_manager = peer_manager
 
-        # Cria o socket
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server_socket.bind((self.host, self.port))
 
+    def _recv_all(self, conn):
+        """Função auxiliar para garantir que recebemos o JSON completo."""
+        data = b""
+        while True:
+            part = conn.recv(BUFFER_SIZE)
+            data += part
+            if len(part) < BUFFER_SIZE:
+                # Ou a mensagem terminou, ou não há mais dados no socket
+                break
+        return data.decode('utf-8')
+
     def _handle_request(self, conn, addr):
-        """Processa um pedido de aconselhamento recebido e LOGA o evento."""
+        """Processa um pacote de gossip recebido."""
         start_time = time.time()
-
         ip_origem = addr[0]
-        ip_destino = self.peer_manager.get_local_info().get('ip', 'N/A')
-
-        decision = "ERROR"
-        requester_id = "Unknown"
-        ground_truth = "N/A"
-        requester_chain = []  # Inicializa a cadeia de IPs
 
         try:
-            data = conn.recv(BUFFER_SIZE).decode('utf-8')
-            if not data: return
+            data_str = self._recv_all(conn)
+            if not data_str: return
 
-            request = json.loads(data)
-            requester_id = request.get('requester_id', 'Unknown')
-            amostra_str = request.get('amostra', 'N/A')
-            ground_truth = request.get('ground_truth', 'N/A')
-            # --- NOVO: Extrai a cadeia de IPs da requisição ---
-            requester_chain = request.get('requester_chain', [])
-            # ------------------------------------------------
+            package = json.loads(data_str)
+            msg_type = package.get('type', 'UNKNOWN')
 
-            # --- LÓGICA DE CLASSIFICAÇÃO REAL NO SERVIDOR ---
-            try:
-                amostra_array = np.array(json.loads(amostra_str), dtype=float)
+            # Verifica se é um pacote de Gossip válido
+            if msg_type == "GOSSIP_PUSH":
+                node_origin = package.get('node_origin', 'Unknown')
+                
+                # --- LÓGICA DE INTEGRAÇÃO DE CONHECIMENTO ---
+                try:
+                    # Envia o pacote para o node.py integrar no modelo local
+                    self.gossip_integration_fn(package)
+                    status = "SUCCESS"
+                    msg = "Conhecimento integrado com sucesso."
+                except Exception as e:
+                    print(f"[{self.node_id.upper()}] ERRO AO INTEGRAR GOSSIP: {e}")
+                    status = "ERROR_INTEGRATION"
+                    msg = str(e)
+                
+                print(f"[{self.node_id.upper()}] [SERVIDOR] Gossip recebido de {node_origin} ({ip_origem}:{addr[1]}).")
 
-                # O callback agora recebe todos os argumentos necessários
-                final_prediction_str = self.counseling_logic_fn(amostra_array, requester_id, ip_origem, ground_truth,
-                                                                requester_chain)
+            else:
+                status = "ERROR_BAD_REQUEST"
+                msg = "Tipo de mensagem não suportado."
 
-                if final_prediction_str == 'LOOP_CLOSED':
-                    decision = "LOOP_CLOSED"
-                    counsel_msg = "Alerta: Loop de aconselhamento fechado. Ninguém tem a resposta. Decisão local de melhor modelo usada."
-                # ------------------------------------
-                else:
-                    # Assumimos que qualquer outra coisa é uma classe de intrusão (ex: '1', '2')
-                    decision = final_prediction_str
-                    counsel_msg = f"Intrusão Confirmada: Classe {final_prediction_str} (Alta Confiança via DCS)."
-
-            except Exception as e:
-                print(f"ERRO DE SERVIDOR: Classificação falhou: {e}")
-                decision = "ERROR_CLASSIFICATION"
-                counsel_msg = "Motor de classificação falhou nesta amostra."
-            # ------------------------------------------------
-
-            print(f"\n[SERVIDOR] Pedido de aconselhamento recebido de {requester_id} ({ip_origem}:{addr[1]})")
-
+            # Devolve um ACK simples (Acknowledge)
             response = {
-                "counselor_id": self.node_id,
-                "decision": decision,
-                "counsel": counsel_msg
+                "receiver_id": self.node_id,
+                "status": status,
+                "message": msg
             }
-
             conn.sendall(json.dumps(response).encode('utf-8'))
-            print(f"[SERVIDOR] Conselho enviado: '{response['decision']}'.")
 
         except Exception as e:
-            print(f"[SERVIDOR] Erro processando pedido: {e}")
-            decision = f"ERROR_REQUEST: {type(e).__name__}"
+            print(f"[{self.node_id.upper()}] [SERVIDOR] Erro processando conexão: {e}")
         finally:
             if 'conn' in locals():
                 conn.close()
 
-            # --- LOGGING ---
-            end_time = time.time()
-            processing_time_ms = (end_time - start_time) * 1000
-
-            self.logger.log_conselho_recebido(
-                name_solicitante=requester_id,
-                name_conselheiro=self.node_id,
-                ip_origem=ip_origem,
-                ip_destino=ip_destino,
-                tempo_proc_ms=processing_time_ms,
-                decisao=decision,
-                ground_truth=ground_truth
-            )
-            # ---------------
+            # Aqui você pode adaptar seu logger para registrar recebimentos de Gossip
+            # em vez de "pedidos de conselho"
+            # end_time = time.time()
+            # processing_time_ms = (end_time - start_time) * 1000
+            # self.logger.log_gossip_recebido(...)
 
     def start_listening(self):
-        """Inicia o servidor em uma thread separada para não bloquear o nó principal."""
         self.is_running = True
-        self.server_socket.listen(5)  # Permite 5 conexões enfileiradas
-
-        print(f"[SERVIDOR] Escutando em {self.host}:{self.port}...")
+        self.server_socket.listen(5)
+        print(f"[{self.node_id.upper()}] [SERVIDOR] Escutando Gossip em {self.host}:{self.port}...")
 
         def listen_thread():
             while self.is_running:
                 try:
                     conn, addr = self.server_socket.accept()
-                    # Cria uma nova thread para lidar com o pedido
                     client_thread = threading.Thread(
                         target=self._handle_request, args=(conn, addr)
                     )
                     client_thread.daemon = True
                     client_thread.start()
                 except socket.timeout:
-                    # Apenas continua
                     continue
                 except Exception as e:
                     if self.is_running:
-                        print(f"[SERVIDOR] Erro inesperado: {e}")
+                        print(f"[{self.node_id.upper()}] [SERVIDOR] Erro inesperado: {e}")
                     break
 
         threading.Thread(target=listen_thread, daemon=True).start()
 
     def stop_listening(self):
-        """Para o servidor."""
         self.is_running = False
         self.server_socket.close()
 
 
-class CounselorClient:
-    """Implementa a funcionalidade de cliente para pedir conselho a outros pares."""
+class GossipClient:
+    """Implementa o cliente que envia (faz push) do conhecimento para outros pares."""
 
     def __init__(self, node_id, peer_manager, logger):
         self.node_id = node_id
         self.peer_manager = peer_manager
         self.logger = logger
 
-        # BUSCA INFO LOCAL COMPLETA (IP e PORTA)
-        local_info = self.peer_manager.get_local_info()
-        self.local_ip = local_info.get('ip', '127.0.0.1')
-        self.local_port = local_info.get('port')
-
-    def request_counsel(self, sample_data_array, all_peers_list, ground_truth, requester_chain=None):
+    def send_gossip(self, target_peer, knowledge_package):
         """
-        Filtra a lista para remover a si mesmo (IP + Porta) e seleciona um par.
+        Envia amostras ou pesos do modelo para o vizinho selecionado.
         """
-        print("\n--- PEDINDO ACONSELHAMENTO P2P ---")
-
-        # FILTRO INTELIGENTE: Essencial para rodar múltiplos nós no mesmo IP (127.0.0.1)
-        other_peers = [
-            p for p in all_peers_list
-            if not (p['ip'] == self.local_ip and p['port'] == self.local_port)
-        ]
-
-        if not other_peers:
-            print(f"[{self.node_id}] Alerta: Nenhum outro par disponível (Filtro resultou em lista vazia).")
-            # Debug para entender quem estava na lista
-            print(f"DEBUG: Eu sou {self.local_ip}:{self.local_port}. Lista total tinha {len(all_peers_list)} peers.")
-            return None
-
-        # 1. FIXANDO SEED PARA REPRODUTIBILIDADE
-        import random
-        # Usamos um seed fixo para garantir que o simulador escolha sempre o mesmo par no teste
-        # random.seed(42)
-        target_peer = random.choice(other_peers)
-
         peer_ip = target_peer['ip']
         peer_port = target_peer['port']
-        peer_name = target_peer['name']
+        peer_name = target_peer.get('name', f"{peer_ip}:{peer_port}")
 
-        print(f"[CLIENTE] Conselheiro Selecionado: {peer_name} ({peer_ip}:{peer_port})")
+        # Adiciona metadados de protocolo ao pacote
+        knowledge_package["type"] = "GOSSIP_PUSH"
+        knowledge_package["node_origin"] = self.node_id
 
-        # --- PREPARAÇÃO DOS DADOS ---
-        if requester_chain is None:
-            requester_chain = []
+        payload = json.dumps(knowledge_package).encode('utf-8')
 
-        sample_data_str = json.dumps(sample_data_array.tolist())
-
-        request_data = {
-            "requester_id": self.node_id,
-            "reason": "Conflito de classificador local",
-            "amostra": sample_data_str,
-            "ground_truth": str(ground_truth),
-            "requester_chain": requester_chain
-        }
-        request_message = json.dumps(request_data).encode('utf-8')
-
-        # --- COMUNICAÇÃO SOCKET ---
-        start_time = time.time()
-        response = None
-        log_decision = "ERROR_CONNECTION"
         client_socket = None
+        start_time = time.time()
+        status = "ERROR_CONNECTION"
 
         try:
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client_socket.settimeout(5)
             client_socket.connect((peer_ip, peer_port))
-            client_socket.sendall(request_message)
+            
+            # Envia todos os dados
+            client_socket.sendall(payload)
 
-            response_data = client_socket.recv(BUFFER_SIZE).decode('utf-8')
+            # Aguarda a confirmação (ACK)
+            response_data = client_socket.recv(1024).decode('utf-8')
             response = json.loads(response_data)
-            log_decision = response.get('decision', 'ERROR_RESPONSE')
 
-            print("--- CONSELHO RECEBIDO ---")
-            print(f"Decisão do Conselheiro ({response['counselor_id']}): {log_decision}")
-            print("--------------------------")
-            # time.sleep(30)  # Espera entre as amostras
-            # print("DANDO UMA CALMADINHA")
+            if response.get("status") == "SUCCESS":
+                status = "SUCCESS"
+                # Opcional: comentar o print abaixo em produção para não poluir o terminal
+                # print(f"[{self.node_id.upper()}] [CLIENTE] Gossip aceito por {peer_name}.")
+            else:
+                status = response.get("status", "UNKNOWN_ERROR")
+                print(f"[{self.node_id.upper()}] [CLIENTE] {peer_name} rejeitou o gossip: {response.get('message')}")
 
         except Exception as e:
-            print(f"[CLIENTE] Erro na comunicação P2P com {peer_name}: {e}")
-            log_decision = f"ERROR: {type(e).__name__}"
+            print(f"[{self.node_id.upper()}] [CLIENTE] Falha ao enviar gossip para {peer_name}: {e}")
         finally:
             if client_socket:
                 client_socket.close()
 
-            # --- LOGGING ---
-            end_time = time.time()
-            processing_time_ms = (end_time - start_time) * 1000
+            # Aqui você pode adaptar o seu logger para salvar o histórico de gossips enviados
+            # self.logger.log_gossip_enviado(...)
 
-            self.logger.log_conflito_gerado(
-                name_solicitante=self.node_id,
-                name_conselheiro=peer_name,
-                ip_origem=self.local_ip,
-                ip_destino=peer_ip,
-                tempo_proc_ms=processing_time_ms,
-                decisao=log_decision,
-                ground_truth=ground_truth
-            )
-
-        return response
-
+        return status

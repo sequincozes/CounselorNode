@@ -3,7 +3,7 @@ import time
 
 # Importação da camada de infraestrutura
 from infrastructure.config_manager import ConfigManager
-from infrastructure.networking import CounselorServer, CounselorClient
+from infrastructure.networking import GossipServer, GossipClient
 
 
 class CounselorNode:
@@ -21,8 +21,8 @@ class CounselorNode:
         self.source_type = local_info['source_type']
 
         # Componente 2 & 3: Rede
-        self.client = CounselorClient(node_id, self.peer_manager)
-        self.server = CounselorServer(self.host, self.port, self.node_id, self.source_type)
+        self.client = GossipClient(node_id, self.peer_manager)
+        self.server = GossipServer(self.host, self.port, self.node_id, self.source_type)
 
         print(f"--- {self.node_id.upper()} INICIADO ---")
         print(f"Endereço: {self.host}:{self.port}")

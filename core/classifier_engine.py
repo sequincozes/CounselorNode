@@ -1,6 +1,7 @@
 import os
 import sys
 import warnings
+import threading
 
 import numpy as np
 import pandas as pd
@@ -44,6 +45,9 @@ class ClassifierEngine:
         self.f1_threshold = float(self.config.get("f1_threshold", 0.05))
         self.f1_min_required = float(self.config.get("f1_min_required", 0.80))  # 0..1
 
+        # Mantém no máximo as últimas 5000 amostras para treino.
+        self.max_train_samples = int(self.config.get("max_train_samples", 5000))
+
         self.random_state = int(self.config.get("random_state", 42))
         self.use_stratify = bool(self.config.get("stratify", True))
 
@@ -59,6 +63,9 @@ class ClassifierEngine:
         )
         self.final_test_source = self.config.get("final_test_dataset_source", None)
         self.target_column = self.config.get("target_column", None)
+
+        # Lock para sincronização thread-safe durante rebuild
+        self._rebuild_lock = threading.Lock()
 
         # RAW
         self.X_train_raw = None
@@ -167,12 +174,17 @@ class ClassifierEngine:
 
         X_train, X_eval, y_train, y_eval = self._safe_split(X, y, test_size=self.eval_size)
 
+        # --- APLICA A JANELA NO CARREGAMENTO INICIAL ---
+        if len(y_train) > self.max_train_samples:
+            X_train = X_train[-self.max_train_samples:]
+            y_train = y_train[-self.max_train_samples:]
+
         self.X_train_raw = X_train
         self.X_eval_raw = X_eval
         self.y_train = y_train
         self.y_eval = y_eval
 
-        print(f"[ENGINE] SPLIT A: TRAIN={self.X_train_raw.shape[0]} | EVAL={self.X_eval_raw.shape[0]}")
+        print(f"[ENGINE] SPLIT A: TRAIN={self.X_train_raw.shape[0]} (Max: {self.max_train_samples}) | EVAL={self.X_eval_raw.shape[0]}")
 
     # ---------- scaler + kmeans ----------
     def _fit_scaler_and_cluster(self):
@@ -364,11 +376,16 @@ class ClassifierEngine:
 
     # ---------- inference ----------
     def classify_and_check_conflict(self, sample_raw):
-        if self.scaler is None or self.kmeans is None:
-            return {"classification": "UNKNOWN", "conflict": True, "decisions": ["Engine not ready"], "cluster_id": -1}
+        with self._rebuild_lock:
+            if self.scaler is None or self.kmeans is None:
+                return {"classification": "UNKNOWN", "conflict": True, "decisions": ["Engine not ready"], "cluster_id": -1}
 
-        sample_scaled = self.scaler.transform(sample_raw.reshape(1, -1))
-        cluster_id = int(self.kmeans.predict(sample_scaled)[0])
+            # Verificar se o KMeans está realmente fitted (não apenas se existe)
+            if not hasattr(self.kmeans, 'cluster_centers_'):
+                return {"classification": "UNKNOWN", "conflict": True, "decisions": ["KMeans not fitted yet"], "cluster_id": -1}
+
+            sample_scaled = self.scaler.transform(sample_raw.reshape(1, -1))
+            cluster_id = int(self.kmeans.predict(sample_scaled)[0])
 
         if self.outlier_enabled:
             centroid = self.kmeans.cluster_centers_[cluster_id]
@@ -451,28 +468,35 @@ class ClassifierEngine:
             self.X_train_raw = np.vstack([self.X_train_raw, sample_raw.reshape(1, -1)])
             self.y_train = np.append(self.y_train, label)
 
+        # --- JANELA DESLIZANTE (FORGETTING) ---
+        # Se ultrapassar o limite, removemos os dados mais antigos do topo do array
+        if len(self.y_train) > self.max_train_samples:
+            self.X_train_raw = self.X_train_raw[-self.max_train_samples:]
+            self.y_train = self.y_train[-self.max_train_samples:]
+
         if retrain:
             self.rebuild()
 
     def rebuild(self):
-        # refit scaler
-        self.scaler = StandardScaler()
-        self.X_train = self.scaler.fit_transform(self.X_train_raw)
-        self.X_eval = self.scaler.transform(self.X_eval_raw)
+        with self._rebuild_lock:
+            # refit scaler
+            self.scaler = StandardScaler()
+            self.X_train = self.scaler.fit_transform(self.X_train_raw)
+            self.X_eval = self.scaler.transform(self.X_eval_raw)
 
-        # kmeans
-        self.kmeans = KMeans(n_clusters=self.n_clusters, random_state=self.random_state, n_init="auto")
-        self.kmeans.fit(self.X_train)
+            # kmeans
+            self.kmeans = KMeans(n_clusters=self.n_clusters, random_state=self.random_state, n_init="auto")
+            self.kmeans.fit(self.X_train)
 
-        self.clusters_train = self.kmeans.predict(self.X_train)
-        self.clusters_eval = self.kmeans.predict(self.X_eval)
+            self.clusters_train = self.kmeans.predict(self.X_train)
+            self.clusters_eval = self.kmeans.predict(self.X_eval)
 
-        # outlier
-        self._fit_outlier_thresholds_from_train()
+            # outlier
+            self._fit_outlier_thresholds_from_train()
 
-        # models + committee
-        self._train_global_models()
-        self._select_committee_per_cluster()
+            # models + committee
+            self._train_global_models()
+            self._select_committee_per_cluster()
 
     # ---------- snapshot rows (inclui f1_by_classifier) ----------
     def get_cluster_f1_snapshot_rows(self):

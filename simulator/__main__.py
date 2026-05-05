@@ -10,7 +10,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 
-from core.node import CounselorNode
+from core.node import GossipNode
 from infrastructure.config_manager import ConfigManager
 from infrastructure.logger import CounselorLogger
 from infrastructure.networking import CounselorClient
@@ -54,7 +54,14 @@ def _get_other_peers_ip_port(self):
 
 
 def _get_ml_config_with_override(self):
-    cfg = copy.deepcopy(self.ml_config)
+    # Primeiro obtém a configuração específica do nó
+    cfg = self.local_info.get('ml_config', {})
+
+    # Fallback para configuração global se não houver configuração específica
+    if not cfg:
+        cfg = self.config.get('ml_config', {})
+
+    # Aplica override se existir para esta porta
     ov = ML_OVERRIDES_BY_PORT.get(self.local_port)
     if ov:
         cfg.update(ov)
@@ -72,7 +79,7 @@ def node_process(ip, port, ml_override=None, poison_rate=1, delay=0):
         if ml_override:
             ML_OVERRIDES_BY_PORT[port] = ml_override
 
-        node = CounselorNode(detected_ip=ip, local_port=port, poison_rate=poison_rate, delay=delay)
+        node = GossipNode(detected_ip=ip, local_port=port, poison_rate=poison_rate, delay=delay)
         print(f"{Colors.OKBLUE}[SISTEMA] Nó {node.node_id} Online em {ip}:{port}{Colors.ENDC}")
 
         node.start()

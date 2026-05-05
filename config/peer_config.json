@@ -6,40 +6,86 @@
     {
       "name": "no_1",
       "ip": "127.0.0.1",
-      "port": 5000
+      "port": 5000,
+      "ml_config": {
+        "target_column": "class",
+        "outlier_enabled": true,
+        "outlier_percentile": 97.0,
+        "train_eval_dataset_source": "data_sbrc2026/treino_no1.csv",
+        "final_test_dataset_source": "data_sbrc2026/teste_no1.csv",
+        "clustering_n_clusters": 5,
+        "classifiers": [
+          "DecisionTreeClassifier",
+          "KNeighborsClassifier",
+          "GaussianNB",
+          "SVC"
+        ],
+        "eval_size": 0.30,
+        "random_state": 42,
+        "stratify": true,
+        "f1_threshold": 0.05,
+        "f1_min_required": 0.80,
+        "min_cluster_train_samples": 50,
+        "min_cluster_eval_samples": 20,
+        "min_samples_per_class_eval": 2,
+        "n_features": 25
+      }
     },
     {
       "name": "no_2",
       "ip": "127.0.0.1",
-      "port": 5001
+      "port": 5001,
+      "ml_config": {
+        "target_column": "class",
+        "outlier_enabled": true,
+        "outlier_percentile": 97.0,
+        "train_eval_dataset_source": "data_sbrc2026/no2.csv",
+        "final_test_dataset_source": "data_sbrc2026/teste_no1.csv",
+        "clustering_n_clusters": 5,
+        "classifiers": [
+          "DecisionTreeClassifier",
+          "KNeighborsClassifier",
+          "GaussianNB",
+          "SVC"
+        ],
+        "eval_size": 0.30,
+        "random_state": 42,
+        "stratify": true,
+        "f1_threshold": 0.05,
+        "f1_min_required": 0.80,
+        "min_cluster_train_samples": 50,
+        "min_cluster_eval_samples": 20,
+        "min_samples_per_class_eval": 2,
+        "n_features": 25
+      }
     },
     {
       "name": "no_3",
       "ip": "127.0.0.1",
-      "port": 5002
+      "port": 5002,
+      "ml_config": {
+        "target_column": "class",
+        "outlier_enabled": true,
+        "outlier_percentile": 97.0,
+        "train_eval_dataset_source": "data_sbrc2026/no3.csv",
+        "final_test_dataset_source": "data_sbrc2026/teste_no1.csv",
+        "clustering_n_clusters": 5,
+        "classifiers": [
+          "DecisionTreeClassifier",
+          "KNeighborsClassifier",
+          "GaussianNB",
+          "SVC"
+        ],
+        "eval_size": 0.30,
+        "random_state": 42,
+        "stratify": true,
+        "f1_threshold": 0.05,
+        "f1_min_required": 0.80,
+        "min_cluster_train_samples": 50,
+        "min_cluster_eval_samples": 20,
+        "min_samples_per_class_eval": 2,
+        "n_features": 25
+      }
     }
-  ],
-  "ml_config": {
-    "target_column": "class",
-    "outlier_enabled": true,
-    "outlier_percentile": 97.0,
-    "train_eval_dataset_source": "data_sbrc2026/treino_no1.csv",
-    "final_test_dataset_source": "data_sbrc2026/teste_no1.csv",
-    "clustering_n_clusters": 5,
-    "classifiers": [
-      "DecisionTreeClassifier",
-      "KNeighborsClassifier",
-      "GaussianNB",
-      "SVC"
-    ],
-    "eval_size": 0.30,
-    "random_state": 42,
-    "stratify": true,
-    "f1_threshold": 0.05,
-    "f1_min_required": 0.80,
-    "min_cluster_train_samples": 50,
-    "min_cluster_eval_samples": 20,
-    "min_samples_per_class_eval": 2,
-    "n_features": 25
-  }
+  ]
 }
