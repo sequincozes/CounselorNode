@@ -1,0 +1,22 @@
+Métricas para o nó 1:
+Acurácia: 0.4290
+
+Relatório de Classificação:
+              precision    recall  f1-score   support
+
+         FDI       1.00      0.38      0.55       250
+      Replay       0.00      0.00      0.00         0
+     UNKNOWN       0.00      0.00      0.00         0
+      benign       1.00      0.59      0.74       500
+   evil_twin       1.00      0.15      0.26       250
+
+    accuracy                           0.43      1000
+   macro avg       0.60      0.22      0.31      1000
+weighted avg       1.00      0.43      0.58      1000
+
+Matriz de Confusão:
+[[ 96   0 154   0   0]
+ [  0   0   0   0   0]
+ [  0   0   0   0   0]
+ [  0  98 106 296   0]
+ [  0   0 213   0  37]]

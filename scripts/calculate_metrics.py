@@ -4,14 +4,14 @@ from sklearn.metrics import classification_report, confusion_matrix, accuracy_sc
 
 def calculate_metrics(node_number):
     # Path to the CSV file
-    csv_path = f'../logs/no_{node_number}_classificacoes.csv'
+    csv_path = f'../logs/no_{node_number}_decisoes.csv'
     
     # Read the CSV
     df = pd.read_csv(csv_path)
     
     # Extract ground truth and predictions
     y_true = df['ground_truth']
-    y_pred = df['final_decision']
+    y_pred = df['decisao']
     
     # Calculate metrics
     accuracy = accuracy_score(y_true, y_pred)

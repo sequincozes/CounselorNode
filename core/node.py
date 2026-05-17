@@ -46,6 +46,12 @@ class GossipNode:
         # 5. Motor ML (Machine Learning)
         ml_config = self.peer_manager.get_ml_config()
         self.engine = ClassifierEngine(ml_config)
+        # Controla se a ordem de processamento das amostras de teste deve ser aleatorizada
+        self.randomize_test_order = bool(ml_config.get('randomize_test_order', False))
+        seed = ml_config.get('test_random_seed', None)
+        self._rand = random.Random(seed)
+        # Controla se o nó deve fazer aprendizado online com cada amostra classificada
+        self.online_learning_enabled = bool(ml_config.get('online_learning_enabled', True))
 
         # 6. Módulos de Rede Gossip
         self.client = GossipClient(self.node_id, self.peer_manager, self.logger)
@@ -60,12 +66,21 @@ class GossipNode:
 
         # 7. Configurações do Loop de Gossip
         self.gossip_active = True
-        self.gossip_interval = 2 # Frequência de fofoca (em segundos)
+        self.gossip_interval = 4 # Frequência de fofoca (em segundos)
         self.gossip_thread = threading.Thread(target=self._gossip_loop, daemon=True)
 
         # 8. Controle de Amostras Processadas (para parada automática)
         self.processed_samples = set()  # Índices das amostras já processadas
         self.all_samples_processed = False  # Flag para indicar quando todas foram processadas
+
+        # 9. Controle de Amostras UNKNOWN para reclassificação
+        self.unknown_samples = []  # Lista de (idx, sample_data, ground_truth) para reclassificar
+        self.final_decisions = {}   # Dicionário idx -> (sample_data, ground_truth, decisao_final)
+        self.samples_in_initial_pass = set()  # Índices das amostras processadas na 1ª passagem
+
+        # 10. Rastreamento de clusters para amostras benign
+        self.benign_cluster_counts = {}  # cluster_id -> {'count': int, 'final': {label: count}}
+        self.benign_cluster_examples = []  # exemplos de inspeção inicial
 
         print(f"--- {self.node_id.upper()} (GOSSIP NODE) INICIADO ---")
         print(f"Endereço de Escuta: {self.bind_host}:{self.port}")
@@ -91,7 +106,7 @@ class GossipNode:
         if random.random() >= self.poison_rate:
             return decision  # Escapa do envenenamento pela probabilidade
 
-        print(f"[{self.node_id.upper()}] ⚠ *** ATAQUE: CLASSIFICAÇÃO ENVENENADA ***")
+        print(f"[{self.node_id.upper()}] [AVISO] *** ATAQUE: CLASSIFICACAO ENVENENADA ***")
         return "FDI" if decision == "benign" else "benign"
 
 
@@ -119,14 +134,23 @@ class GossipNode:
                 self.client.send_gossip(target_peer, knowledge_package)
 
     def _prepare_knowledge_package(self):
-        """Retorna um dicionário com as últimas amostras aprendidas para compartilhar."""
+        """Retorna um pacote de GOSSIP contendo amostras de TREINO para compartilhar.
+
+        O nó envia apenas amostras de treino/experiência local, não amostras de teste.
+        """
         # Verificamos se o motor já tem dados de treino
         if hasattr(self.engine, 'y_train') and len(self.engine.y_train) > 0:
-            # Pega as últimas 5 amostras que o nó processou
-            n_samples = min(5, len(self.engine.y_train))
+            # Pega as últimas amostras de treino válidas, filtrando labels inválidas
+            valid_indices = [i for i, label in enumerate(self.engine.y_train) if label not in self.INVALID_LABELS]
+            if not valid_indices:
+                return None
+            # Pega as últimas 5 válidas
+            n_samples = min(5, len(valid_indices))
+            selected_indices = valid_indices[-n_samples:]
             return {
-                "samples": self.engine.X_train_raw[-n_samples:].tolist(),
-                "labels": self.engine.y_train[-n_samples:].tolist()
+                "payload_type": "TRAINING_SAMPLES",
+                "samples": [self.engine.X_train_raw[i].tolist() for i in selected_indices],
+                "labels": [self.engine.y_train[i] for i in selected_indices]
             }
         return None
 
@@ -142,9 +166,9 @@ class GossipNode:
         if not samples:
             return
 
-        print(f"[{self.node_id.upper()}] Integrou {len(samples)} amostras vindas do nó {origin}.")
+        print(f"[{self.node_id.upper()}] Integrou {len(samples)} amostras de TREINO vindas do nó {origin}.")
 
-        # Adiciona as amostras ao motor
+        # Adiciona as amostras de treino recebidas ao motor
         for s, l in zip(samples, labels):
             if l not in self.INVALID_LABELS:
                 sample_raw = np.asarray(s, dtype=float).reshape(-1)
@@ -162,7 +186,8 @@ class GossipNode:
     def generate_next_sample(self):
         """
         Gera a próxima amostra não processada do conjunto de teste.
-        Retorna None quando todas as amostras foram processadas.
+        Retorna uma tupla (idx, sample_data, ground_truth).
+        Retorna (None, None, None) quando todas as amostras forem processadas.
         """
         # Tenta usar o CSV B (Final Test) primeiro
         if hasattr(self.engine, 'X_final_test_raw') and self.engine.X_final_test_raw is not None and len(self.engine.X_final_test_raw) > 0:
@@ -172,13 +197,16 @@ class GossipNode:
             if not available_indices:
                 # Todas as amostras foram processadas
                 self.all_samples_processed = True
-                print(f"[{self.node_id.upper()}] ✅ TODAS AS {total_samples} AMOSTRAS DO DATASET FORAM PROCESSADAS!")
-                return None, None
+                print(f"[{self.node_id.upper()}] [OK] TODAS AS {total_samples} AMOSTRAS DO DATASET FORAM PROCESSADAS!")
+                return None, None, None
 
-            # Seleciona a próxima amostra (ordem sequencial)
-            idx = available_indices[0]
+            # Seleciona a próxima amostra (sequencial ou aleatória conforme config)
+            if getattr(self, 'randomize_test_order', False):
+                idx = self._rand.choice(available_indices)
+            else:
+                idx = available_indices[0]
             self.processed_samples.add(idx)
-            return self.engine.X_final_test_raw[idx], self.engine.y_final_test[idx]
+            return idx, self.engine.X_final_test_raw[idx], self.engine.y_final_test[idx]
 
         # Fallback: Se não tiver CSV B configurado, usa o EVAL (CSV A)
         elif hasattr(self.engine, 'X_eval_raw') and self.engine.X_eval_raw is not None and len(self.engine.X_eval_raw) > 0:
@@ -188,46 +216,146 @@ class GossipNode:
             if not available_indices:
                 # Todas as amostras foram processadas
                 self.all_samples_processed = True
-                print(f"[{self.node_id.upper()}] ✅ TODAS AS {total_samples} AMOSTRAS DO DATASET FORAM PROCESSADAS!")
-                return None, None
+                print(f"[{self.node_id.upper()}] [OK] TODAS AS {total_samples} AMOSTRAS DO DATASET FORAM PROCESSADAS!")
+                return None, None, None
 
             # Seleciona a próxima amostra (ordem sequencial)
             idx = available_indices[0]
             self.processed_samples.add(idx)
-            return self.engine.X_eval_raw[idx], self.engine.y_eval[idx]
+            return idx, self.engine.X_eval_raw[idx], self.engine.y_eval[idx]
 
         # Fallback extremo caso o motor não tenha carregado nada
-        print(f"[{self.node_id.upper()}] ⚠ AVISO: Nenhum dataset de teste encontrado!")
-        return None, None
+        print(f"[{self.node_id.upper()}] [AVISO] AVISO: Nenhum dataset de teste encontrado!")
+        return None, None, None
 
 
     # ==========================================
     # LÓGICA DE DETECÇÃO DE TRÁFEGO (INFERÊNCIA)
     # ==========================================
 
-    def check_traffic_and_act(self, sample_data_array, ground_truth):
+    def check_traffic_and_act(self, sample_idx, sample_data_array, ground_truth, is_reclassification=False, skip_logging=False, skip_learning=False):
         """
         No Gossip, o fluxo de inferência é puramente local e muito mais rápido.
         A "sabedoria da rede" já está embutida nos pesos do motor via _execute_gossip_logic.
+        
+        Args:
+            sample_idx: Índice único da amostra no dataset de teste
+            sample_data_array: Dados da amostra
+            ground_truth: Rótulo verdadeiro
+            is_reclassification: Se é uma reclassificação de UNKNOWN
+            skip_logging: Se True, não loga no CSV (usado durante reclassificações iterativas)
         """
         print(f"[{self.node_id.upper()}] Analisando amostra (Ground Truth: {ground_truth})")
 
         # 1. Faz a inferência usando o motor local (que está constantemente aprendendo com a rede)
         results = self.engine.classify_and_check_conflict(sample_data_array)
-        
-        # Como não existe mais a espera por "conselho", usamos a melhor predição do modelo local
-        # O classifier_engine no Gossip geralmente deve retornar a decisão majoritária do ensemble.
-        best_model_class = self.engine.counseling_logic(sample_data_array)
-        final_decision = best_model_class
+        final_decision = results.get("classification", "UNKNOWN")
+
+        # Se a inferência detectar conflito / outlier ou resultar em UNKNOWN, mantenha UNKNOWN.
+        if final_decision == "CONFLICT_DETECTED" or final_decision in self.INVALID_LABELS:
+            final_decision = "UNKNOWN"
 
         # 2. Verifica se o nó atual está atuando como malicioso
         if self._poisoning_active():
             final_decision = self._poison(final_decision)
 
         # 3. Aprende com a própria amostra recém-classificada (Online Learning Pessoal)
-        if final_decision not in self.INVALID_LABELS:
+        # Em algumas execuções (p. ex. avaliação determinística) queremos desabilitar
+        # o aprendizado online para evitar que a ordem das amostras afete os resultados.
+        # Somente aprenda online a partir de amostras que NÃO sejam do conjunto de teste.
+        # Aprendizado a partir de amostras recebidas via GOSSIP é tratado em _execute_gossip_logic().
+        if self.online_learning_enabled and not skip_learning and final_decision not in self.INVALID_LABELS:
+            # Permite aprendizado online a partir de amostras classificadas (inclui amostras de teste)
             self.engine.add_training_sample_raw(sample_data_array, final_decision, retrain=True)
+        elif not self.online_learning_enabled and not skip_learning:
+            print(f"[{self.node_id.upper()}] Online learning está desabilitado; amostra não será adicionada ao treino.")
+
+        # 4. Se for classificação inicial e resultou em UNKNOWN, armazena para reclassificação
+        if not is_reclassification and final_decision == "UNKNOWN" and sample_idx is not None:
+            self.unknown_samples.append((sample_idx, sample_data_array, ground_truth))
+
+        # 5. Rastreia a decisão final (será logada apenas uma vez ao final)
+        if sample_idx is not None:
+            self.final_decisions[sample_idx] = (sample_data_array, ground_truth, final_decision)
+
+        # 7. Loga a decisão no CSV APENAS se não estiver em reclassificação ou se não pular logging
+        if ground_truth == "benign" and sample_idx is not None:
+            cluster_id = results.get("cluster_id", -1)
+            entry = self.benign_cluster_counts.setdefault(cluster_id, {"count": 0, "final": {}})
+            entry["count"] += 1
+            entry["final"][final_decision] = entry["final"].get(final_decision, 0) + 1
+            if len(self.benign_cluster_examples) < 20:
+                self.benign_cluster_examples.append((sample_idx, cluster_id, final_decision, results.get("decisions", [])))
+
+        if not skip_logging:
+            self.logger.log_decisao(ground_truth, final_decision, self.node_id)
 
         print(f"[{self.node_id.upper()}] Decisão Final (Gossip-driven): {final_decision}")
         
         return final_decision
+
+
+    def try_reclassify_unknowns(self):
+        """
+        Tenta reclassificar as amostras que foram marcadas como UNKNOWN.
+        Retorna o número de amostras que foram reclassificadas com sucesso.
+        
+        IMPORTANTE: Não loga no CSV durante reclassificações. O logging final acontece
+        apenas uma vez ao término de todas as iterações.
+        """
+        if not self.unknown_samples:
+            return 0
+
+        reclassified_count = 0
+        remaining_unknowns = []
+
+        for idx, sample_data, ground_truth in self.unknown_samples:
+            # Tenta classificar novamente SEM logar no CSV (skip_logging=True)
+            result = self.check_traffic_and_act(
+                idx,
+                sample_data, 
+                ground_truth, 
+                is_reclassification=True,
+                skip_logging=True,  # Não loga durante reclassificações
+                skip_learning=True  # Não aprender durante reclassificações de teste
+            )
+            
+            if result != "UNKNOWN":
+                reclassified_count += 1
+                print(f"[{self.node_id.upper()}] [REC] Reclassificada amostra {idx}: UNKNOWN -> {result}")
+            else:
+                remaining_unknowns.append((idx, sample_data, ground_truth))
+
+        self.unknown_samples = remaining_unknowns
+        return reclassified_count
+
+
+    def log_final_decisions(self):
+        """
+        Loga as decisões finais de TODAS as amostras uma única vez.
+        Chamado após todas as iterações de reclassificação serem concluídas.
+        """
+        total_logged = 0
+        
+        # Loga todas as decisões armazenadas em final_decisions
+        for idx in sorted(self.final_decisions.keys()):
+            sample_data, ground_truth, final_decision = self.final_decisions[idx]
+            self.logger.log_decisao(ground_truth, final_decision, self.node_id)
+            total_logged += 1
+        
+        print(f"[{self.node_id.upper()}] [OK] Logging final concluido: {total_logged} amostras logadas")
+        return total_logged
+
+    def report_benign_cluster_distribution(self):
+        total = sum(v["count"] for v in self.benign_cluster_counts.values())
+        print(f"[{self.node_id.upper()}] [BENIGN CLUSTER REPORT] {total} benign samples traced.")
+        if total == 0:
+            print(f"[{self.node_id.upper()}] Nenhum benign processado para rastreamento de cluster.")
+            return
+        for cluster_id in sorted(self.benign_cluster_counts.keys()):
+            stats = self.benign_cluster_counts[cluster_id]
+            print(f"  Cluster {cluster_id}: {stats['count']} amostras -> {stats['final']}")
+        if self.benign_cluster_examples:
+            print(f"[{self.node_id.upper()}] Exemplos de benign analisados (até 20):")
+            for sample_idx, cluster_id, final_decision, decisions in self.benign_cluster_examples:
+                print(f"    idx={sample_idx} cluster={cluster_id} final={final_decision} votos={decisions}")

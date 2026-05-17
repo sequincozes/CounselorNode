@@ -40,9 +40,9 @@ def main():
     print("Iniciando nó...")
 
     if args.poison_rate > 0:
-        print(f"⚠ Nó MALICIOSO iniciado com taxa de envenenamento de {args.poison_rate*100}% após {args.delay} segundos")
+        print(f"[AVISO] No MALICIOSO iniciado com taxa de envenenamento de {args.poison_rate*100}% apos {args.delay} segundos")
     else:
-        print("✅ Nó HONESTO iniciado (sem envenenamento)")
+        print("[OK] No HONESTO iniciado (sem envenenamento)")
 
     try:
         # 2. Atualizado: Usando GossipNode e PASSANDO OS ARGUMENTOS CORRETAMENTE
@@ -67,19 +67,48 @@ def main():
 
         # Loop de Simulação de Tráfego
         rodada = 1
+        max_reclassification_iterations = 3  # Limite de iterações de reclassificação
+        
         while True:
             # Pega a próxima amostra não processada (sequencial)
-            suspect_sample_data, ground_truth = node.generate_next_sample()
+            sample_idx, suspect_sample_data, ground_truth = node.generate_next_sample()
             
             # Verifica se todas as amostras foram processadas
             if suspect_sample_data is None:
-                print(f"\n[{node.node_id.upper()}] 🎯 SIMULAÇÃO CONCLUÍDA - Todas as amostras foram classificadas!")
+                print(f"\n[{node.node_id.upper()}] [OK] SIMULACAO CONCLUIDA - Todas as amostras foram classificadas!")
                 print(f"[{node.node_id.upper()}] Total de amostras processadas: {len(node.processed_samples)}")
+                
+                # Fase de reclassificação das UNKNOWN
+                if node.unknown_samples:
+                    print(f"\n[{node.node_id.upper()}] [REC] Iniciando reclassificacao de {len(node.unknown_samples)} amostras UNKNOWN...")
+                    
+                    for iteration in range(max_reclassification_iterations):
+                        print(f"\n[{node.node_id.upper()}] [REC] Iteracao de reclassificacao {iteration + 1}/{max_reclassification_iterations}")
+                        
+                        reclassified = node.try_reclassify_unknowns()
+                        print(f"[{node.node_id.upper()}] [REC] Reclassificadas nesta iteracao: {reclassified}")
+                        
+                        if reclassified == 0:
+                            print(f"[{node.node_id.upper()}] [REC] Nenhuma reclassificacao nesta iteracao. Parando.")
+                            break
+                        
+                        # Pequena pausa entre iterações
+                        time.sleep(1)
+                    
+                    print(f"[{node.node_id.upper()}] [REC] Reclassificacao concluida. Restam {len(node.unknown_samples)} UNKNOWN.")
+                
+                # === LOGGING FINAL UNICO ===
+                # Loga todas as decisoes uma unica vez apos todas as iteracoes
+                print(f"\n[{node.node_id.upper()}] [LOG] INICIANDO LOGGING FINAL DAS 1000 AMOSTRAS...")
+                node.log_final_decisions()
+                node.report_benign_cluster_distribution()
+                print(f"[{node.node_id.upper()}] [OK] SIMULACAO FINALIZADA COM SUCESSO!")
+                
                 break
             
-            # Passa a amostra e o ground truth para o nó avaliar
+            # Passa a amostra e o ground truth para o nó avaliar (SEM logar, apenas rastreia)
             # No Gossip, a decisão é instantânea pois o nó já aprendeu com os vizinhos
-            result = node.check_traffic_and_act(suspect_sample_data, ground_truth)
+            result = node.check_traffic_and_act(sample_idx, suspect_sample_data, ground_truth, skip_logging=True)
 
             # Aqui você pode salvar logs adicionais se quiser, mas o node.py já loga a decisão.
             time.sleep(2)  # Aumentei o sleep para 2s para facilitar a leitura no terminal

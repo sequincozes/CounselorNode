@@ -11,6 +11,7 @@ from sklearn.datasets import load_breast_cancer
 from sklearn.metrics import f1_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+from sklearn.utils.validation import check_is_fitted
 
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.neighbors import KNeighborsClassifier
@@ -56,6 +57,7 @@ class ClassifierEngine:
 
         self.outlier_enabled = bool(self.config.get("outlier_enabled", True))
         self.outlier_percentile = float(self.config.get("outlier_percentile", 97.0))
+        self.outlier_threshold_factor = float(self.config.get("outlier_threshold_factor", 1.0))
 
         self.train_eval_source = self.config.get(
             "train_eval_dataset_source",
@@ -64,8 +66,8 @@ class ClassifierEngine:
         self.final_test_source = self.config.get("final_test_dataset_source", None)
         self.target_column = self.config.get("target_column", None)
 
-        # Lock para sincronização thread-safe durante rebuild
-        self._rebuild_lock = threading.Lock()
+        # Lock para sincronização thread-safe durante rebuild e atualizações de treino
+        self._rebuild_lock = threading.RLock()
 
         # RAW
         self.X_train_raw = None
@@ -201,6 +203,42 @@ class ClassifierEngine:
 
         print("[ENGINE] K-Means fit complete. Clusters assigned for TRAIN and EVAL.")
 
+    def _log_scaler_status(self, note, sample=None, exc=None):
+        """Helper to print debug information about the scaler and sample shapes."""
+        try:
+            print(f"[ENGINE] SCALER LOG - {note}")
+            if hasattr(self, 'X_train_raw') and self.X_train_raw is not None:
+                print(f"  X_train_raw.shape={getattr(self, 'X_train_raw').shape}")
+            if hasattr(self, 'X_eval_raw') and self.X_eval_raw is not None:
+                print(f"  X_eval_raw.shape={getattr(self, 'X_eval_raw').shape}")
+            if hasattr(self, 'X_final_test_raw') and self.X_final_test_raw is not None:
+                print(f"  X_final_test_raw.shape={getattr(self, 'X_final_test_raw').shape}")
+
+            if sample is not None:
+                try:
+                    s = np.asarray(sample)
+                    print(f"  sample.shape={s.shape} sample_dtype={s.dtype}")
+                    # show a small summary
+                    flat = s.reshape(-1)
+                    print(f"  sample[min,max,mean]=[{flat.min():.3f},{flat.max():.3f},{flat.mean():.3f}]")
+                except Exception as e:
+                    print(f"  could not inspect sample: {e}")
+
+            if hasattr(self, 'scaler') and self.scaler is not None and hasattr(self.scaler, 'mean_'):
+                try:
+                    means = self.scaler.mean_
+                    scales = getattr(self.scaler, 'scale_', None)
+                    print(f"  scaler.mean_.shape={means.shape} scaler.scale_.shape={getattr(scales, 'shape', None)}")
+                    # print first few entries for quick inspection
+                    print(f"  scaler.mean_[:5]={means.flatten()[:5]} scaler.scale_[:5]={(scales.flatten()[:5] if scales is not None else None)}")
+                except Exception as e:
+                    print(f"  could not print scaler stats: {e}")
+
+            if exc is not None:
+                print(f"  exception: {repr(exc)}")
+        except Exception as outer:
+            print(f"[ENGINE] FATAL: failed to log scaler status: {outer}")
+
     # ---------- outlier thresholds ----------
     def _fit_outlier_thresholds_from_train(self):
         self.cluster_outlier_thresholds = {}
@@ -227,6 +265,7 @@ class ClassifierEngine:
             dists = np.linalg.norm(Xc - centroid, axis=1)
 
             thr = float(np.percentile(dists, p))
+            thr = max(0.0, thr * float(self.outlier_threshold_factor))
             self.cluster_outlier_thresholds[c] = thr
             self.cluster_outlier_stats[c] = {
                 "p": p,
@@ -370,7 +409,15 @@ class ClassifierEngine:
 
         self.X_final_test_raw = X
         self.y_final_test = y
-        self.X_final_test = self.scaler.transform(X)  # opcional
+        try:
+            check_is_fitted(self.scaler)
+            self.X_final_test = self.scaler.transform(X)  # opcional
+        except Exception as exc:
+            try:
+                self._log_scaler_status("Scaler.transform failed on FINAL TEST load", sample=X if hasattr(X, 'shape') and X.shape[0] > 0 else None, exc=exc)
+            except Exception:
+                pass
+            self.X_final_test = X  # fallback, sem scaling
 
         print(f"[ENGINE] FINAL TEST ready: {self.X_final_test_raw.shape[0]} samples.")
 
@@ -380,11 +427,21 @@ class ClassifierEngine:
             if self.scaler is None or self.kmeans is None:
                 return {"classification": "UNKNOWN", "conflict": True, "decisions": ["Engine not ready"], "cluster_id": -1}
 
-            # Verificar se o KMeans está realmente fitted (não apenas se existe)
+            if not self._is_scaler_fitted():
+                return {"classification": "UNKNOWN", "conflict": True, "decisions": ["Scaler not fitted yet"], "cluster_id": -1}
+
             if not hasattr(self.kmeans, 'cluster_centers_'):
                 return {"classification": "UNKNOWN", "conflict": True, "decisions": ["KMeans not fitted yet"], "cluster_id": -1}
 
-            sample_scaled = self.scaler.transform(sample_raw.reshape(1, -1))
+            try:
+                sample_scaled = self.scaler.transform(sample_raw.reshape(1, -1))
+            except Exception as exc:
+                # Log detailed scaler/sample info for debugging
+                try:
+                    self._log_scaler_status("Scaler transform failed", sample=sample_raw, exc=exc)
+                except Exception:
+                    pass
+                return {"classification": "UNKNOWN", "conflict": True, "decisions": [f"Scaler transform failed: {exc}"], "cluster_id": -1}
             cluster_id = int(self.kmeans.predict(sample_scaled)[0])
 
         if self.outlier_enabled:
@@ -433,7 +490,19 @@ class ClassifierEngine:
         return {"classification": final_class, "conflict": bool(conflict), "decisions": decisions, "cluster_id": cluster_id}
 
     def counseling_logic(self, sample_raw):
-        sample_scaled = self.scaler.transform(sample_raw.reshape(1, -1))
+        if self.scaler is None or self.kmeans is None:
+            return "UNKNOWN"
+
+        if not self._is_scaler_fitted():
+            return "UNKNOWN"
+
+        if not hasattr(self.kmeans, 'cluster_centers_'):
+            return "UNKNOWN"
+
+        try:
+            sample_scaled = self.scaler.transform(sample_raw.reshape(1, -1))
+        except Exception:
+            return "UNKNOWN"
         cluster_id = int(self.kmeans.predict(sample_scaled)[0])
 
         if cluster_id not in self.cluster_classifiers:
@@ -461,28 +530,53 @@ class ClassifierEngine:
     def add_training_sample_raw(self, sample_raw, label, retrain=False):
         sample_raw = np.asarray(sample_raw, dtype=float).reshape(-1)
 
-        if self.X_train_raw is None:
-            self.X_train_raw = sample_raw.reshape(1, -1)
-            self.y_train = np.array([label])
-        else:
-            self.X_train_raw = np.vstack([self.X_train_raw, sample_raw.reshape(1, -1)])
-            self.y_train = np.append(self.y_train, label)
+        with self._rebuild_lock:
+            if self.X_train_raw is None:
+                self.X_train_raw = sample_raw.reshape(1, -1)
+                self.y_train = np.array([label])
+            else:
+                self.X_train_raw = np.vstack([self.X_train_raw, sample_raw.reshape(1, -1)])
+                self.y_train = np.append(self.y_train, label)
 
-        # --- JANELA DESLIZANTE (FORGETTING) ---
-        # Se ultrapassar o limite, removemos os dados mais antigos do topo do array
-        if len(self.y_train) > self.max_train_samples:
-            self.X_train_raw = self.X_train_raw[-self.max_train_samples:]
-            self.y_train = self.y_train[-self.max_train_samples:]
+            # --- JANELA DESLIZANTE (FORGETTING) ---
+            # Se ultrapassar o limite, removemos os dados mais antigos do topo do array
+            if len(self.y_train) > self.max_train_samples:
+                self.X_train_raw = self.X_train_raw[-self.max_train_samples:]
+                self.y_train = self.y_train[-self.max_train_samples:]
 
-        if retrain:
-            self.rebuild()
+            if retrain:
+                self.rebuild()
 
     def rebuild(self):
         with self._rebuild_lock:
+            # Ensure X_train_raw and y_train have the same length
+            n_samples = min(len(self.y_train), self.X_train_raw.shape[0])
+            if n_samples != self.X_train_raw.shape[0] or n_samples != len(self.y_train):
+                print(f"[ENGINE] WARN: Mismatch in training data lengths. X_train_raw: {self.X_train_raw.shape[0]}, y_train: {len(self.y_train)}. Truncating to {n_samples} samples.")
+            if n_samples < self.X_train_raw.shape[0]:
+                self.X_train_raw = self.X_train_raw[:n_samples]
+            if n_samples < len(self.y_train):
+                self.y_train = self.y_train[:n_samples]
+
+            print(f"[ENGINE] After truncation: X_train_raw.shape={self.X_train_raw.shape}, len(y_train)={len(self.y_train)}")
+
             # refit scaler
             self.scaler = StandardScaler()
             self.X_train = self.scaler.fit_transform(self.X_train_raw)
-            self.X_eval = self.scaler.transform(self.X_eval_raw)
+            # log scaler fitted info
+            try:
+                self._log_scaler_status("Scaler fitted after rebuild")
+            except Exception:
+                pass
+            try:
+                self.X_eval = self.scaler.transform(self.X_eval_raw)
+            except Exception as exc:
+                print(f"[ENGINE] WARN: Failed to transform X_eval_raw with scaler: {exc}")
+                try:
+                    self._log_scaler_status("Scaler failed to transform X_eval_raw", exc=exc)
+                except Exception:
+                    pass
+                self.X_eval = self.X_eval_raw if self.X_eval_raw is not None else np.empty((0, self.X_train_raw.shape[1]))
 
             # kmeans
             self.kmeans = KMeans(n_clusters=self.n_clusters, random_state=self.random_state, n_init="auto")
@@ -498,7 +592,15 @@ class ClassifierEngine:
             self._train_global_models()
             self._select_committee_per_cluster()
 
-    # ---------- snapshot rows (inclui f1_by_classifier) ----------
+    def _is_scaler_fitted(self):
+        if self.scaler is None:
+            return False
+        try:
+            check_is_fitted(self.scaler)
+        except Exception:
+            return False
+        return hasattr(self.scaler, 'scale_') and hasattr(self.scaler, 'mean_')
+
     def get_cluster_f1_snapshot_rows(self):
         rows = []
         for cluster_id in range(self.n_clusters):
@@ -535,8 +637,19 @@ class ClassifierEngine:
         - centroid_distance e outlier são calculados para o cluster ATRIBUÍDO à amostra.
           Para clusters não atribuídos, centroid_distance fica "" e outlier=False.
         """
-        # Calcula cluster atribuído e distância ao centróide (no espaço escalado)
-        sample_scaled = self.scaler.transform(sample_raw.reshape(1, -1))
+        if self.scaler is None or self.kmeans is None:
+            return []
+
+        if not self._is_scaler_fitted():
+            return []
+
+        if not hasattr(self.kmeans, 'cluster_centers_'):
+            return []
+
+        try:
+            sample_scaled = self.scaler.transform(sample_raw.reshape(1, -1))
+        except Exception:
+            return []
         assigned_cluster = int(self.kmeans.predict(sample_scaled)[0])
 
         centroid = self.kmeans.cluster_centers_[assigned_cluster]
