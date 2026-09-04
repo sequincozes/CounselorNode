@@ -1,0 +1,10 @@
+{
+  "dataset_source": "../data_sbrc2026/teste_no1.csv",
+  "target_column": null,
+  "targets": [
+    { "name": "no_1", "ip": "192.168.1.100", "sample_port": 6000 },
+    { "name": "no_2", "ip": "192.168.1.100", "sample_port": 6001 },
+    { "name": "no_3", "ip": "192.168.1.100", "sample_port": 6002 }
+  ],
+  "report_output": "logs/sample_sender_report.csv"
+}
