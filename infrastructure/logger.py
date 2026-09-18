@@ -29,6 +29,11 @@ DECISOES_HEADERS = [
     "responsavel"
 ]
 
+AMOSTRAS_HEADERS = [
+    "timestamp", "sample_id", "ground_truth", "decisao", "tempo_proc_ms"
+]
+
+
 
 class CounselorLogger:
     """Gerencia a escrita de logs em CSV de forma thread-safe."""
@@ -57,6 +62,9 @@ class CounselorLogger:
         self._init_or_fix_header(self.conselhos_log_file, CONSELHO_HEADERS)
         self._init_or_fix_header(self.cluster_long_file, LONG_HEADERS)
         self._init_or_fix_header(self.decisoes_file, DECISOES_HEADERS)
+
+        self.amostras_log_file = os.path.join(self.log_dir, f"{self.node_id}_amostras_recebidas.csv")
+        self._init_or_fix_header(self.amostras_log_file, AMOSTRAS_HEADERS)
 
     def _init_or_fix_header(self, file_path, expected_headers):
         """
@@ -152,3 +160,11 @@ class CounselorLogger:
                     csv.writer(f).writerow(row)
             except IOError as e:
                 print(f"ERRO DE LOG: Falha ao escrever em {self.decisoes_file}: {e}")
+
+    # -------- NOVO: amostras recebidas --------
+    def log_amostra_recebida(self, node_id, sample_id, ground_truth, decisao, tempo_proc_ms):
+        with self.lock:
+            with open(self.amostras_log_file, "a", newline="", encoding="utf-8") as f:
+                csv.writer(f).writerow([
+                datetime.now().isoformat(), sample_id, ground_truth, decisao, tempo_proc_ms
+            ])

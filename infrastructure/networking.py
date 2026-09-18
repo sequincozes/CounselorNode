@@ -174,13 +174,15 @@ class CounselorClient:
         self.local_ip = local_info.get('ip', '127.0.0.1')
         self.local_port = local_info.get('port')
 
-    def request_counsel(self, sample_data_array, all_peers_list, ground_truth, requester_chain=None):
+    def request_counsel(self, sample_data_array, all_peers_list, ground_truth, requester_chain=None,
+                         max_retries=5, retry_delay=3):
         """
-        Filtra a lista para remover a si mesmo (IP + Porta) e seleciona um par.
+        Filtra a lista para remover a si mesmo (IP + Porta) e tenta contatar um
+        conselheiro. Se o par sorteado ainda não estiver escutando (nó em boot),
+        tenta novamente com outro par, respeitando um limite de tentativas.
         """
         print("\n--- PEDINDO ACONSELHAMENTO P2P ---")
 
-        # FILTRO INTELIGENTE: Essencial para rodar múltiplos nós no mesmo IP (127.0.0.1)
         other_peers = [
             p for p in all_peers_list
             if not (p['ip'] == self.local_ip and p['port'] == self.local_port)
@@ -188,28 +190,12 @@ class CounselorClient:
 
         if not other_peers:
             print(f"[{self.node_id}] Alerta: Nenhum outro par disponível (Filtro resultou em lista vazia).")
-            # Debug para entender quem estava na lista
-            print(f"DEBUG: Eu sou {self.local_ip}:{self.local_port}. Lista total tinha {len(all_peers_list)} peers.")
             return None
 
-        # 1. FIXANDO SEED PARA REPRODUTIBILIDADE
-        import random
-        # Usamos um seed fixo para garantir que o simulador escolha sempre o mesmo par no teste
-        # random.seed(42)
-        target_peer = random.choice(other_peers)
-
-        peer_ip = target_peer['ip']
-        peer_port = target_peer['port']
-        peer_name = target_peer['name']
-
-        print(f"[CLIENTE] Conselheiro Selecionado: {peer_name} ({peer_ip}:{peer_port})")
-
-        # --- PREPARAÇÃO DOS DADOS ---
         if requester_chain is None:
             requester_chain = []
 
         sample_data_str = json.dumps(sample_data_array.tolist())
-
         request_data = {
             "requester_id": self.node_id,
             "reason": "Conflito de classificador local",
@@ -219,48 +205,53 @@ class CounselorClient:
         }
         request_message = json.dumps(request_data).encode('utf-8')
 
-        # --- COMUNICAÇÃO SOCKET ---
-        start_time = time.time()
-        response = None
-        log_decision = "ERROR_CONNECTION"
-        client_socket = None
+        import random
+        candidates = other_peers.copy()
+        random.shuffle(candidates)
 
-        try:
-            client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            client_socket.settimeout(5)
-            client_socket.connect((peer_ip, peer_port))
-            client_socket.sendall(request_message)
+        for attempt in range(1, max_retries + 1):
+            if not candidates:
+                candidates = other_peers.copy()
+                random.shuffle(candidates)
 
-            response_data = client_socket.recv(BUFFER_SIZE).decode('utf-8')
-            response = json.loads(response_data)
-            log_decision = response.get('decision', 'ERROR_RESPONSE')
+            target_peer = candidates.pop(0)
+            peer_ip, peer_port, peer_name = target_peer['ip'], target_peer['port'], target_peer['name']
 
-            print("--- CONSELHO RECEBIDO ---")
-            print(f"Decisão do Conselheiro ({response['counselor_id']}): {log_decision}")
-            print("--------------------------")
-            # time.sleep(30)  # Espera entre as amostras
-            # print("DANDO UMA CALMADINHA")
+            print(f"[CLIENTE] Tentativa {attempt}/{max_retries}: conselheiro {peer_name} ({peer_ip}:{peer_port})")
 
-        except Exception as e:
-            print(f"[CLIENTE] Erro na comunicação P2P com {peer_name}: {e}")
-            log_decision = f"ERROR: {type(e).__name__}"
-        finally:
-            if client_socket:
-                client_socket.close()
+            start_time = time.time()
+            response, log_decision, client_socket = None, "ERROR_CONNECTION", None
 
-            # --- LOGGING ---
-            end_time = time.time()
-            processing_time_ms = (end_time - start_time) * 1000
+            try:
+                client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                client_socket.settimeout(5)
+                client_socket.connect((peer_ip, peer_port))
+                client_socket.sendall(request_message)
 
-            self.logger.log_conflito_gerado(
-                name_solicitante=self.node_id,
-                name_conselheiro=peer_name,
-                ip_origem=self.local_ip,
-                ip_destino=peer_ip,
-                tempo_proc_ms=processing_time_ms,
-                decisao=log_decision,
-                ground_truth=ground_truth
-            )
+                response_data = client_socket.recv(BUFFER_SIZE).decode('utf-8')
+                response = json.loads(response_data)
+                log_decision = response.get('decision', 'ERROR_RESPONSE')
 
-        return response
+                print(f"--- CONSELHO RECEBIDO de {response['counselor_id']}: {log_decision} ---")
 
+            except Exception as e:
+                print(f"[CLIENTE] {peer_name} indisponível ({type(e).__name__}). "
+                      f"Tentando novamente em {retry_delay}s...")
+                log_decision = f"ERROR: {type(e).__name__}"
+            finally:
+                if client_socket:
+                    client_socket.close()
+                processing_time_ms = (time.time() - start_time) * 1000
+                self.logger.log_conflito_gerado(
+                    name_solicitante=self.node_id, name_conselheiro=peer_name,
+                    ip_origem=self.local_ip, ip_destino=peer_ip,
+                    tempo_proc_ms=processing_time_ms, decisao=log_decision, ground_truth=ground_truth
+                )
+
+            if response is not None:
+                return response
+
+            time.sleep(retry_delay)
+
+        print(f"[CLIENTE] Esgotadas {max_retries} tentativas. Nenhum conselheiro respondeu.")
+        return None

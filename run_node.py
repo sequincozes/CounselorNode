@@ -1,23 +1,9 @@
 import time
 import numpy as np
 from core.node import CounselorNode
-from infrastructure.networking import detect_local_ip  # Importa a função de detecção
+from infrastructure.networking import detect_local_ip
 import argparse
 
-
-# Função auxiliar para gerar amostras de teste consistentes
-def generate_test_sample(engine):
-    """
-    Gera uma amostra aleatória do conjunto de teste do ClassifierEngine
-    e seu respectivo ground truth (rótulo real).
-    """
-    if engine.X_test is not None and len(engine.X_test) > 0:
-        idx = np.random.randint(0, len(engine.X_test))
-        # Retorna a amostra (já padronizada) e o rótulo real (ground truth)
-        return engine.X_test[idx], engine.y_test[idx]
-
-    # Fallback
-    return np.zeros(engine.config['n_features']), "N/A"
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Counselor Node")
@@ -36,11 +22,11 @@ def parse_args():
     )
 
     parser.add_argument(
-    "--delay",
-    type=int,
-    default=0,
-    help="Tempo (em segundos) antes do nó começar a envenenar conselhos"
-)
+        "--delay",
+        type=int,
+        default=0,
+        help="Tempo (em segundos) antes do nó começar a envenenar conselhos"
+    )
     return parser.parse_args()
 
 
@@ -58,15 +44,18 @@ def main():
         print("Nó honesto iniciado (sem envenenamento)")
 
     try:
-        # 2. Inicializa o nó usando o IP detectado como identificador
-        node = CounselorNode(local_ip)
-        print("Vai chamar o node.start...")
+        # 2. Inicializa o nó, agora passando a porta explicitamente
+        node = CounselorNode(
+            local_ip,
+            local_port=args.port,
+            poison_rate=args.poison_rate,
+            delay=args.delay
+        )
 
+        print("Vai chamar o node.start...")
         node.start()
         print("O nó startou...")
 
-        # Dá tempo para a configuração (treinamento de ML pode levar alguns segundos)
-        # e para outros nós iniciarem.
         print("Aguardando 10s para inicialização do motor de ML e da rede...")
         time.sleep(10)
 
@@ -74,15 +63,9 @@ def main():
         print(f"SIMULAÇÃO: {node.node_id.upper()} (DCS) VERIFICANDO TRÁFEGO")
         print("=" * 50)
 
-        # Simulação de Tráfego (agora todos os nós fazem isso)
+        print("Nó pronto. Aguardando amostras via SampleReceiver...")
         while True:
-            # Amostra 1: Deve ser classificada ou gerar conflito
-            suspect_sample_data, ground_truth = generate_test_sample(node.engine)
-            # Passa a amostra e o ground truth para o nó
-            result = node.check_traffic_and_act(suspect_sample_data, ground_truth)
-
-            time.sleep(1)  # Espera entre as amostras
-
+            time.sleep(60)
 
     except KeyboardInterrupt:
         print("\nPrograma terminado pelo usuário.")

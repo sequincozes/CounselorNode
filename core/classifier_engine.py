@@ -53,10 +53,11 @@ class ClassifierEngine:
         self.outlier_enabled = bool(self.config.get("outlier_enabled", True))
         self.outlier_percentile = float(self.config.get("outlier_percentile", 97.0))
 
-        self.train_eval_source = self.config.get(
-            "train_eval_dataset_source",
-            self.config.get("training_dataset_source", "auto")
+        self.train_eval_source = os.environ.get(
+            "TRAIN_EVAL_DATASET_SOURCE",
+            self.config.get("train_eval_dataset_source", "auto")
         )
+        
         self.final_test_source = self.config.get("final_test_dataset_source", None)
         self.target_column = self.config.get("target_column", None)
 

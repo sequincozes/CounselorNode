@@ -79,7 +79,9 @@ class ConfigManager:
         return self.ml_config
 
     def get_other_peers(self):
-        """Encontra todos os pares que NÃO são este nó local."""
-        # Filtra com base na combinação de IP e Porta
-        return [p for p in self.peers if p['ip'] != self.local_ip ]
+        """Encontra todos os pares que NÃO são este nó local (compara IP e porta)."""
+        return [
+            p for p in self.peers
+            if not (p['ip'] == self.local_ip and p['port'] == self.local_port)
+        ]
 

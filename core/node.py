@@ -9,6 +9,7 @@ import random
 # Importando camadas
 from infrastructure.config_manager import ConfigManager
 from infrastructure.networking import CounselorServer, CounselorClient
+from infrastructure.sample_networking import SampleReceiver
 from infrastructure.logger import CounselorLogger
 from core.classifier_engine import ClassifierEngine
 
@@ -105,12 +106,24 @@ class CounselorNode:
             self.peer_manager
         )
 
+        # 7. Receptor de Amostras (novo canal, porta separada)
+        self.sample_port = self.peer_manager.get_local_info().get('sample_port', self.port + 1000)
+        self.sample_receiver = SampleReceiver(
+            self.bind_host,
+            self.sample_port,
+            self.node_id,
+            self.check_traffic_and_act,   # reaproveita 100% o método já existente
+            self.logger
+        )
+
         print(f"--- {self.node_id.upper()} INICIADO ---")
         print(f"Endereço de Escuta: {self.bind_host}:{self.port}")
+        print(f"Endereço de Escuta (amostras): {self.bind_host}:{self.sample_port}")
 
     def start(self):
-        """Inicia o servidor e mantém o nó ativo."""
+        """Inicia os servidores (conselhos e amostras) e mantém o nó ativo."""
         self.server.start_listening()
+        self.sample_receiver.start_listening()
 
     def _poisoning_active(self):
         """Ativa o envenenamento após o atraso definido"""
