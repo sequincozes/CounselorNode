@@ -53,13 +53,19 @@ class ClassifierEngine:
         self.outlier_enabled = bool(self.config.get("outlier_enabled", True))
         self.outlier_percentile = float(self.config.get("outlier_percentile", 97.0))
 
+        # Variáveis de ambiente têm prioridade máxima sobre ml_config:
         self.train_eval_source = os.environ.get(
             "TRAIN_EVAL_DATASET_SOURCE",
             self.config.get("train_eval_dataset_source", "auto")
         )
-        
-        self.final_test_source = self.config.get("final_test_dataset_source", None)
-        self.target_column = self.config.get("target_column", None)
+        self.final_test_source = os.environ.get(
+            "FINAL_TEST_DATASET_SOURCE",
+            self.config.get("final_test_dataset_source", None)
+        )
+        self.target_column = os.environ.get(
+            "TARGET_COLUMN",
+            self.config.get("target_column", None)
+        )
 
         # RAW
         self.X_train_raw = None
@@ -565,4 +571,3 @@ class ClassifierEngine:
                 })
 
         return rows
-

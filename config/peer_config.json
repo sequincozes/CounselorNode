@@ -5,25 +5,33 @@
   "counselor_peers": [
     {
       "name": "no_1",
-      "ip": "192.168.1.103",
-      "port": 5000
+      "ip": "192.168.1.101",
+      "port": 5000,
+      "sample_port": 6000,
+      "train_eval_dataset_source": "data_sbrc2026/treino_no1.csv",
+      "final_test_dataset_source": "data_sbrc2026/teste_no1.csv"
     },
     {
       "name": "no_2",
-      "ip": "192.168.1.103",
-      "port": 5001
+      "ip": "192.168.1.101",
+      "port": 5001,
+      "sample_port": 6001,
+      "train_eval_dataset_source": "data_sbrc2026/no2.csv",
+      "final_test_dataset_source": "data_sbrc2026/no2.csv"
     },
     {
       "name": "no_3",
-      "ip": "192.168.1.103",
-      "port": 5002
+      "ip": "192.168.1.101",
+      "port": 5002,
+      "sample_port": 6002,
+      "train_eval_dataset_source": "data_sbrc2026/no3.csv",
+      "final_test_dataset_source": "data_sbrc2026/no3.csv"
     }
   ],
   "ml_config": {
     "target_column": "class",
     "outlier_enabled": true,
     "outlier_percentile": 97.0,
-    "train_eval_dataset_source": "data_sbrc2026/treino_no1.csv",
     "clustering_n_clusters": 5,
     "classifiers": [
       "DecisionTreeClassifier",

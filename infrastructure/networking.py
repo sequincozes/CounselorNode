@@ -6,7 +6,8 @@ import time
 import os
 import sys
 
-BUFFER_SIZE = 1024
+# Aumentado para suportar vetores de features (25+ floats) em JSON
+BUFFER_SIZE = 65536
 
 
 def detect_local_ip():
@@ -27,6 +28,30 @@ def detect_local_ip():
         if s:
             s.close()
     return ip
+
+
+def _recv_all(sock, buffer_size=BUFFER_SIZE):
+    """
+    Lê todos os dados disponíveis no socket até que a conexão seja fechada
+    ou não haja mais dados. Necessário para mensagens maiores que BUFFER_SIZE.
+    """
+    chunks = []
+    while True:
+        try:
+            chunk = sock.recv(buffer_size)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            # Tenta decodificar: se for JSON válido, terminou
+            try:
+                json.loads(b"".join(chunks).decode('utf-8'))
+                break
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                # Ainda incompleto, continua lendo
+                continue
+        except socket.timeout:
+            break
+    return b"".join(chunks)
 
 
 class CounselorServer:
@@ -61,31 +86,30 @@ class CounselorServer:
         requester_chain = []  # Inicializa a cadeia de IPs
 
         try:
-            data = conn.recv(BUFFER_SIZE).decode('utf-8')
-            if not data: return
+            raw_data = _recv_all(conn)
+            if not raw_data:
+                return
 
+            data = raw_data.decode('utf-8')
             request = json.loads(data)
             requester_id = request.get('requester_id', 'Unknown')
             amostra_str = request.get('amostra', 'N/A')
             ground_truth = request.get('ground_truth', 'N/A')
-            # --- NOVO: Extrai a cadeia de IPs da requisição ---
             requester_chain = request.get('requester_chain', [])
-            # ------------------------------------------------
 
             # --- LÓGICA DE CLASSIFICAÇÃO REAL NO SERVIDOR ---
             try:
                 amostra_array = np.array(json.loads(amostra_str), dtype=float)
 
                 # O callback agora recebe todos os argumentos necessários
-                final_prediction_str = self.counseling_logic_fn(amostra_array, requester_id, ip_origem, ground_truth,
-                                                                requester_chain)
+                final_prediction_str = self.counseling_logic_fn(
+                    amostra_array, requester_id, ip_origem, ground_truth, requester_chain
+                )
 
                 if final_prediction_str == 'LOOP_CLOSED':
                     decision = "LOOP_CLOSED"
                     counsel_msg = "Alerta: Loop de aconselhamento fechado. Ninguém tem a resposta. Decisão local de melhor modelo usada."
-                # ------------------------------------
                 else:
-                    # Assumimos que qualquer outra coisa é uma classe de intrusão (ex: '1', '2')
                     decision = final_prediction_str
                     counsel_msg = f"Intrusão Confirmada: Classe {final_prediction_str} (Alta Confiança via DCS)."
 
@@ -97,10 +121,14 @@ class CounselorServer:
 
             print(f"\n[SERVIDOR] Pedido de aconselhamento recebido de {requester_id} ({ip_origem}:{addr[1]})")
 
+            end_time_inner = time.time()
             response = {
-                "counselor_id": self.node_id,
-                "decision": decision,
-                "counsel": counsel_msg
+                "counselor_id":   self.node_id,
+                "counselor_ip":   self.peer_manager.get_local_info().get('ip', ip_destino),
+                "counselor_port": self.port,
+                "decision":       decision,
+                "counsel":        counsel_msg,
+                "latencia_ms":    (end_time_inner - start_time) * 1000,
             }
 
             conn.sendall(json.dumps(response).encode('utf-8'))
@@ -162,12 +190,17 @@ class CounselorServer:
 
 
 class CounselorClient:
-    """Implementa a funcionalidade de cliente para pedir conselho a outros pares."""
+    """
+    Implementa a funcionalidade de cliente para pedir conselho a outros pares.
+    Integrado ao ReputationManager: filtra pares ISOLATED e usa o gt recebido
+    para atualizar reputação quando disponível.
+    """
 
-    def __init__(self, node_id, peer_manager, logger):
+    def __init__(self, node_id, peer_manager, logger, reputation_manager=None):
         self.node_id = node_id
         self.peer_manager = peer_manager
         self.logger = logger
+        self.reputation_manager = reputation_manager  # Pode ser None (modo sem defesa)
 
         # BUSCA INFO LOCAL COMPLETA (IP e PORTA)
         local_info = self.peer_manager.get_local_info()
@@ -175,18 +208,31 @@ class CounselorClient:
         self.local_port = local_info.get('port')
 
     def request_counsel(self, sample_data_array, all_peers_list, ground_truth, requester_chain=None,
-                         max_retries=5, retry_delay=3):
+                        max_retries=5, retry_delay=3):
         """
-        Filtra a lista para remover a si mesmo (IP + Porta) e tenta contatar um
-        conselheiro. Se o par sorteado ainda não estiver escutando (nó em boot),
+        Filtra a lista para remover a si mesmo (IP + Porta), pares ISOLATED
+        (via ReputationManager) e tenta contatar um conselheiro.
+        Se o par sorteado ainda não estiver escutando (nó em boot),
         tenta novamente com outro par, respeitando um limite de tentativas.
+
+        A resposta inclui counselor_ip e counselor_port para que o chamador
+        possa atualizar a reputação do conselheiro.
         """
         print("\n--- PEDINDO ACONSELHAMENTO P2P ---")
 
+        # Remove a si mesmo
         other_peers = [
             p for p in all_peers_list
             if not (p['ip'] == self.local_ip and p['port'] == self.local_port)
         ]
+
+        # Filtra pares ISOLATED (se ReputationManager disponível)
+        if self.reputation_manager is not None:
+            before = len(other_peers)
+            other_peers = self.reputation_manager.get_active_peers(other_peers)
+            removed = before - len(other_peers)
+            if removed > 0:
+                print(f"[CLIENTE | {self.node_id}] (Defesa) {removed} par(es) ISOLATED removido(s) da lista de candidatos.")
 
         if not other_peers:
             print(f"[{self.node_id}] Alerta: Nenhum outro par disponível (Filtro resultou em lista vazia).")
@@ -197,10 +243,10 @@ class CounselorClient:
 
         sample_data_str = json.dumps(sample_data_array.tolist())
         request_data = {
-            "requester_id": self.node_id,
-            "reason": "Conflito de classificador local",
-            "amostra": sample_data_str,
-            "ground_truth": str(ground_truth),
+            "requester_id":    self.node_id,
+            "reason":          "Conflito de classificador local",
+            "amostra":         sample_data_str,
+            "ground_truth":    str(ground_truth),
             "requester_chain": requester_chain
         }
         request_message = json.dumps(request_data).encode('utf-8')
@@ -224,15 +270,22 @@ class CounselorClient:
 
             try:
                 client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                client_socket.settimeout(5)
+                client_socket.settimeout(10)
                 client_socket.connect((peer_ip, peer_port))
                 client_socket.sendall(request_message)
 
-                response_data = client_socket.recv(BUFFER_SIZE).decode('utf-8')
-                response = json.loads(response_data)
+                response_data = _recv_all(client_socket)
+                response = json.loads(response_data.decode('utf-8'))
                 log_decision = response.get('decision', 'ERROR_RESPONSE')
 
                 print(f"--- CONSELHO RECEBIDO de {response['counselor_id']}: {log_decision} ---")
+
+                # Garante que a resposta tenha campos de localização do conselheiro
+                # (retrocompatível: se o servidor antigo não os enviar, usa target_peer)
+                if 'counselor_ip' not in response:
+                    response['counselor_ip'] = peer_ip
+                if 'counselor_port' not in response:
+                    response['counselor_port'] = peer_port
 
             except Exception as e:
                 print(f"[CLIENTE] {peer_name} indisponível ({type(e).__name__}). "
@@ -249,6 +302,24 @@ class CounselorClient:
                 )
 
             if response is not None:
+                # Atualiza reputação aqui (nível de cliente, quando gt é conhecido)
+                if self.reputation_manager is not None:
+                    gt_str = str(ground_truth)
+                    is_valid_gt = gt_str not in ("N/A", "N/A_from_peer", "UNKNOWN", "")
+                    is_valid_dec = log_decision not in (
+                        "ERROR_CONNECTION", "ERROR_TIMEOUT", "ERROR_CONNECTION_REFUSED",
+                        "LOOP_CLOSED", "ERROR_CLASSIFICATION", "ERROR_RESPONSE"
+                    ) and not log_decision.startswith("ERROR")
+
+                    if is_valid_gt and is_valid_dec:
+                        self.reputation_manager.register_challenge_result(
+                            peer_ip=peer_ip,
+                            peer_port=int(peer_port),
+                            peer_decision=log_decision,
+                            ground_truth=gt_str,
+                            latencia_ms=processing_time_ms,
+                        )
+
                 return response
 
             time.sleep(retry_delay)

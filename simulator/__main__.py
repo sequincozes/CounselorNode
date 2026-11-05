@@ -11,6 +11,7 @@ if PROJECT_ROOT not in sys.path:
 
 
 from core.node import CounselorNode
+from core.reputation_manager import ReputationManager
 from infrastructure.config_manager import ConfigManager
 from infrastructure.logger import CounselorLogger
 from infrastructure.networking import CounselorClient
@@ -67,12 +68,26 @@ ConfigManager.get_ml_config = _get_ml_config_with_override
 ConfigManager.get_other_peers = _get_other_peers_ip_port
 
 
-def node_process(ip, port, ml_override=None, poison_rate=1, delay=0):
+# --- Parâmetros globais do mecanismo de defesa ---
+DEFENSE_TAU            = 0.6   # Limiar de reputação
+DEFENSE_MIN_CHALLENGES = 10    # Mínimo de desafios para habilitar isolamento
+
+
+def node_process(ip, port, ml_override=None, poison_rate=0, delay=0,
+                 defense_tau=DEFENSE_TAU, defense_min_challenges=DEFENSE_MIN_CHALLENGES):
+    """Função executada em cada processo filho (um CounselorNode completo)."""
     try:
         if ml_override:
             ML_OVERRIDES_BY_PORT[port] = ml_override
 
-        node = CounselorNode(detected_ip=ip, local_port=port, poison_rate=poison_rate, delay=delay)
+        node = CounselorNode(
+            detected_ip=ip,
+            local_port=port,
+            poison_rate=poison_rate,
+            delay=delay,
+            defense_tau=defense_tau,
+            defense_min_challenges=defense_min_challenges,
+        )
         print(f"{Colors.OKBLUE}[SISTEMA] Nó {node.node_id} Online em {ip}:{port}{Colors.ENDC}")
 
         node.start()
@@ -83,7 +98,9 @@ def node_process(ip, port, ml_override=None, poison_rate=1, delay=0):
     except KeyboardInterrupt:
         pass
     except Exception as e:
+        import traceback
         print(f"{Colors.FAIL}[ERRO] Falha crítica no nó {port}: {e}{Colors.ENDC}")
+        traceback.print_exc()
 
 
 def _pick_source(engine: ClassifierEngine, sample_source: str):
@@ -110,7 +127,13 @@ def _pick_source(engine: ClassifierEngine, sample_source: str):
     return X_src, y_src, src_name
 
 
-def run_trigger_with_instances(peer_manager, node_id, engine, client, sample_index=0, sample_source="final_test"):
+def run_trigger_with_instances(peer_manager, node_id, engine, client,
+                                reputation_manager,
+                                sample_index=0, sample_source="final_test"):
+    """
+    Processa uma amostra: classifica localmente, consulta a rede em caso de
+    conflito, e atualiza a reputação do conselheiro quando o gt é conhecido.
+    """
     X_src, y_src, src_name = _pick_source(engine, sample_source)
 
     sample_index = int(sample_index)
@@ -136,18 +159,50 @@ def run_trigger_with_instances(peer_manager, node_id, engine, client, sample_ind
     print(f"[{node_id.upper()}] Resultado DCS Local (Cluster {cluster_id}): {classification}")
     print(f"[{node_id.upper()}] Decisões Locais (Classes): {decisions}")
 
-    initial_chain = [f"{peer_manager.local_ip}:{peer_manager.local_port}"]
+    local_info = peer_manager.get_local_info()
+    initial_chain = [f"{local_info.get('ip')}:{local_info.get('port')}"]
 
     if conflict:
         print(f"[{node_id.upper()}] Alerta: CONFLITO DETECTADO! Consultando a Counselors Network.")
 
-        other_peers = peer_manager.get_other_peers()
+        all_other_peers = peer_manager.get_other_peers()
+
+        # Filtra pares ISOLATED
+        other_peers = reputation_manager.get_active_peers(all_other_peers)
+        blocked = len(all_other_peers) - len(other_peers)
+        if blocked > 0:
+            print(f"[{node_id.upper()}] (Defesa) {blocked} par(es) ISOLATED ignorado(s).")
+
         if not other_peers:
-            print(f"[{node_id.upper()}] Ação: Conflito detectado, mas não há outros pares. Usando decisão local padrão.")
+            print(f"[{node_id.upper()}] Ação: Conflito detectado, mas não há outros pares disponíveis. Usando decisão local padrão.")
             best_model_class = engine.counseling_logic(sample_raw)
             return best_model_class, sample_index, sample_raw, ground_truth, conflict
 
         counsel_response = client.request_counsel(sample_raw, other_peers, ground_truth, initial_chain)
+
+        # Atualiza reputação com base no gt (se disponível e resposta válida)
+        if counsel_response and isinstance(counsel_response, dict):
+            dec = counsel_response.get("decision", "")
+            c_ip = counsel_response.get("counselor_ip")
+            c_port = counsel_response.get("counselor_port")
+            gt_str = str(ground_truth)
+            is_valid_gt = gt_str not in ("N/A", "N/A_from_peer", "UNKNOWN", "")
+            is_valid_dec = dec not in (
+                "LOOP_CLOSED", "ERROR_CONNECTION", "ERROR_TIMEOUT",
+                "ERROR_CLASSIFICATION", "ERROR_RESPONSE"
+            ) and not str(dec).startswith("ERROR")
+
+            if is_valid_gt and is_valid_dec and c_ip and c_port:
+                reputation_manager.register_challenge_result(
+                    peer_ip=c_ip,
+                    peer_port=int(c_port),
+                    peer_decision=dec,
+                    ground_truth=gt_str,
+                    latencia_ms=counsel_response.get("latencia_ms", 0.0),
+                )
+                print(f"[{node_id.upper()}] (Defesa) Reputação atualizada: "
+                      f"{counsel_response.get('counselor_id','?')} | decisão={dec} | gt={gt_str}")
+
         return counsel_response, sample_index, sample_raw, ground_truth, conflict
 
     return classification, sample_index, sample_raw, ground_truth, conflict
@@ -193,11 +248,21 @@ def main():
 
     mp.set_start_method("spawn", force=True)
 
-    procs = []
+    # --- Configuração do mecanismo de defesa ---
+    defense_tau            = DEFENSE_TAU
+    defense_min_challenges = DEFENSE_MIN_CHALLENGES
+
+    # --- Configuração de envenenamento (0 = sem veneno) ---
     poison_rate = 0
     delay = 0.0
+
+    procs = []
     for ip, port, ml_override in nodes_config:
-        p = mp.Process(target=node_process, args=(ip, port, ml_override, poison_rate, delay))
+        p = mp.Process(
+            target=node_process,
+            args=(ip, port, ml_override, poison_rate, delay,
+                  defense_tau, defense_min_challenges)
+        )
         p.start()
         procs.append(p)
 
@@ -221,7 +286,22 @@ def main():
     ml_config = peer_manager.get_ml_config()
 
     engine = ClassifierEngine(ml_config)
-    client = CounselorClient(node_id, peer_manager, logger)
+
+    # ReputationManager para o nó controlador do simulador (no_1)
+    reputation_manager = ReputationManager(
+        peers=peer_manager.get_other_peers(),
+        tau=defense_tau,
+        min_challenges=defense_min_challenges,
+        logger=logger,
+        node_id=node_id,
+    )
+
+    client = CounselorClient(
+        node_id,
+        peer_manager,
+        logger,
+        reputation_manager=reputation_manager,
+    )
 
     sample_source = "final_test"
     sample_index = 0
@@ -235,6 +315,7 @@ def main():
                 node_id=node_id,
                 engine=engine,
                 client=client,
+                reputation_manager=reputation_manager,
                 sample_index=sample_index,
                 sample_source=sample_source,
             )
@@ -253,7 +334,6 @@ def main():
 
                 print(f"Amostra #{used_index} | Conselho: {learned_label} (de {counselor_id})")
 
-                # >>> NOVO LOG (decisões) <<<
                 decisao_final = learned_label if learned_label is not None else "UNKNOWN"
                 responsavel = counselor_id
                 logger.log_decisao(ground_truth, decisao_final, responsavel)
@@ -299,16 +379,26 @@ def main():
                 )
                 logger.log_cluster_classifier_f1_long(long_rows)
 
+            # Snapshot de métricas de defesa a cada amostra (opcional: pode ser a cada N amostras)
+            reputation_manager.snapshot_metricas_defesa()
+
             # Próxima amostra
             X_src, _, _ = _pick_source(engine, sample_source)
             sample_index += 1
 
             print(f"{Colors.OKBLUE}[PROGRESSO] Amostra {sample_index}/{max_samples} concluída.{Colors.ENDC}")
-            # time.sleep(5)
 
         print(f"\n{Colors.OKGREEN}=== SIMULAÇÃO CONCLUÍDA COM SUCESSO ==={Colors.ENDC}")
         print(f"{Colors.OKGREEN}Todas as {max_samples} amostras foram processadas.{Colors.ENDC}")
-        
+
+        # Snapshot final de métricas de defesa
+        metricas = reputation_manager.snapshot_metricas_defesa()
+        print(f"\n{Colors.BOLD}[DEFESA] Estado final de reputação:{Colors.ENDC}")
+        for key, val in reputation_manager.get_all_states().items():
+            status_color = Colors.FAIL if val['estado'] == 'ISOLATED' else Colors.OKGREEN
+            print(f"  {key}: rep={val['rep']:.4f} | s={val['s']} | f={val['f']} | "
+                  f"estado={status_color}{val['estado']}{Colors.ENDC}")
+
     except KeyboardInterrupt:
         print(f"\n{Colors.FAIL}[!] Encerrando simulação...{Colors.ENDC}")
     finally:
