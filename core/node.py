@@ -11,7 +11,7 @@ from infrastructure.networking import CounselorServer, CounselorClient
 from infrastructure.sample_networking import SampleReceiver
 from infrastructure.logger import CounselorLogger
 from core.classifier_engine import ClassifierEngine
-from core.reputation_manager import ReputationManager
+from core.reputation_manager import ReputationManager, is_operational_label
 
 
 class CounselorNode:
@@ -64,7 +64,10 @@ class CounselorNode:
 
 
     def __init__(self, detected_ip, local_port=None, poison_rate=1, delay=0,
-                 defense_tau=0.6, defense_min_challenges=10):
+                 defense_enabled=None,
+                 defense_tau=0.6, defense_min_challenges=10,
+                 defense_probe_every=5, defense_comeback_threshold=3,
+                 challenge_min=5, challenge_max=15):
         # Componente 1: Configuração (Inicializado com o IP detectado)
         self.peer_manager = ConfigManager(detected_ip, local_port=local_port)
         local_info = self.peer_manager.get_local_info()
@@ -92,14 +95,24 @@ class CounselorNode:
         self.engine = ClassifierEngine(ml_config)
 
         # 5. Mecanismo de Defesa: Reputação
-        all_peers = self.peer_manager.get_other_peers()
-        self.reputation_manager = ReputationManager(
-            peers=all_peers,
-            tau=defense_tau,
-            min_challenges=defense_min_challenges,
-            logger=self.logger,
-            node_id=self.node_id,
-        )
+        if defense_enabled is None:
+            defense_enabled = ml_config.get("defense_enabled", True)
+        self.defense_enabled = bool(defense_enabled)
+
+        if self.defense_enabled:
+            all_peers = self.peer_manager.get_other_peers()
+            self.reputation_manager = ReputationManager(
+                peers=all_peers,
+                tau=defense_tau,
+                min_challenges=defense_min_challenges,
+                probe_every=defense_probe_every,
+                comeback_threshold=defense_comeback_threshold,
+                logger=self.logger,
+                node_id=self.node_id,
+            )
+        else:
+            self.reputation_manager = None
+            print(f"[{self.node_id.upper()}] Mecanismo de Defesa: DESATIVADO (sem avaliação de reputação ou isolamento).")
 
         # 6. Cliente de Rede (com referência ao ReputationManager)
         self.client = CounselorClient(
@@ -128,6 +141,24 @@ class CounselorNode:
             self.check_traffic_and_act,   # reaproveita 100% o método já existente
             self.logger
         )
+
+        # 9. Desafio Proativo — disparado por contagem de amostras recebidas
+        # Intervalo aleatório entre challenge_min e challenge_max amostras
+        ml_config_challenge_min = ml_config.get("challenge_min_interval", challenge_min)
+        ml_config_challenge_max = ml_config.get("challenge_max_interval", challenge_max)
+        self._challenge_min_interval = int(ml_config_challenge_min)
+        self._challenge_max_interval = int(ml_config_challenge_max)
+        self._samples_since_last_challenge: int = 0
+        self._next_challenge_at: int = random.randint(
+            self._challenge_min_interval, self._challenge_max_interval
+        )
+        self._challenge_lock = threading.Lock()
+        if self.reputation_manager is not None:
+            print(
+                f"[{self.node_id.upper()}] Desafio Proativo — intervalo aleatório: "
+                f"[{self._challenge_min_interval}, {self._challenge_max_interval}] amostras | "
+                f"próximo em {self._next_challenge_at} amostras"
+            )
 
         print(f"--- {self.node_id.upper()} INICIADO ---")
         print(f"Endereço de Escuta: {self.bind_host}:{self.port}")
@@ -195,12 +226,14 @@ class CounselorNode:
                 if f"{p['ip']}:{p['port']}" not in current_chain
             ]
 
-            # Aplica filtro de reputação (remove pares ISOLATED)
-            peers_to_ask = self.reputation_manager.get_active_peers(peers_filtered_chain)
-
-            if len(peers_to_ask) < len(peers_filtered_chain):
-                n_removed = len(peers_filtered_chain) - len(peers_to_ask)
-                print(f"[{self.node_id.upper()}] (Defesa) {n_removed} par(es) ignorado(s) por estarem ISOLATED.")
+            # Aplica filtro de reputação (remove pares ISOLATED se defesa estiver ativa)
+            if self.reputation_manager is not None:
+                peers_to_ask = self.reputation_manager.get_active_peers(peers_filtered_chain)
+                if len(peers_to_ask) < len(peers_filtered_chain):
+                    n_removed = len(peers_filtered_chain) - len(peers_to_ask)
+                    print(f"[{self.node_id.upper()}] (Defesa) {n_removed} par(es) ignorado(s) por estarem ISOLATED.")
+            else:
+                peers_to_ask = peers_filtered_chain
 
             # LÓGICA DE LOOP CLOSED: Se não houver ninguém novo para perguntar
             if not peers_to_ask:
@@ -241,6 +274,70 @@ class CounselorNode:
 
             return classification
 
+    def _send_active_challenge(self, sample_data_array, ground_truth):
+        """
+        Envia um desafio proativo a um par aleatório para avaliar sua reputação.
+        Disparado por contagem de amostras recebidas (independente de conflito).
+        Roda em thread daemon separada para não bloquear a resposta ao SampleSender.
+        """
+        if self.reputation_manager is None:
+            return  # Defesa desativada — sem desafios proativos
+
+        all_peers = self.peer_manager.get_other_peers()
+        if not all_peers:
+            return
+
+        # Inclui pares ISOLATED com probe pendente; exclui os demais ISOLATED
+        candidates = self.reputation_manager.get_active_peers(all_peers)
+        if not candidates:
+            print(f"[{self.node_id.upper()}] (Desafio Ativo) Nenhum par disponível para desafio.")
+            return
+
+        target = random.choice(candidates)
+        local_info = self.peer_manager.get_local_info()
+        chain = [f"{local_info.get('ip')}:{local_info.get('port')}"]
+
+        print(
+            f"[{self.node_id.upper()}] (Desafio Ativo) → {target['name']} "
+            f"({target['ip']}:{target['port']}) | gt={ground_truth}"
+        )
+
+        response = self.client.request_counsel(sample_data_array, [target], ground_truth, chain)
+
+        if response:
+            dec = response.get("decision", "")
+            c_ip = response.get("counselor_ip", target["ip"])
+            c_port = response.get("counselor_port", target["port"])
+            gt_str = str(ground_truth)
+
+            if not is_operational_label(dec) and gt_str not in ("N/A", "N/A_from_peer", "UNKNOWN", ""):
+                evento = self.reputation_manager.register_challenge_result(
+                    peer_ip=c_ip,
+                    peer_port=int(c_port),
+                    peer_decision=dec,
+                    ground_truth=gt_str,
+                    latencia_ms=response.get("latencia_ms", 0.0),
+                    tipo_evento_override="ACTIVE_CHALLENGE",
+                )
+                # Consome probe pendente caso o par esteja ISOLATED
+                self.reputation_manager.consume_probe_for(c_ip, int(c_port))
+                if evento is not None:
+                    print(
+                        f"[{self.node_id.upper()}] (Desafio Ativo) Reputação de "
+                        f"{target['name']} atualizada [ACTIVE_CHALLENGE]: "
+                        f"dec={dec} | gt={gt_str} | "
+                        f"rep={evento['reputacao']:.4f} | estado={evento['estado']}"
+                    )
+            else:
+                print(
+                    f"[{self.node_id.upper()}] (Desafio Ativo) Resposta de {target['name']} "
+                    f"ignorada (label operacional ou gt inválido): dec='{dec}'"
+                )
+        else:
+            print(
+                f"[{self.node_id.upper()}] (Desafio Ativo) Sem resposta de "
+                f"{target['name']} — desafio descartado."
+            )
 
     def check_traffic_and_act(self, sample_data_array, ground_truth):
         """
@@ -269,85 +366,120 @@ class CounselorNode:
             local_info = self.peer_manager.get_local_info()
             initial_chain = [f"{local_info.get('ip')}:{local_info.get('port')}"]
 
-            # Busca outros pares, filtrando pares ISOLATED
+            # Busca outros pares, filtrando pares ISOLATED se defesa ativa
             other_peers_all = self.peer_manager.get_other_peers()
-            other_peers = self.reputation_manager.get_active_peers(other_peers_all)
-
-            if len(other_peers) < len(other_peers_all):
-                n_blocked = len(other_peers_all) - len(other_peers)
-                print(f"[{self.node_id.upper()}] (Defesa) {n_blocked} par(es) ISOLATED ignorado(s) na consulta.")
+            if self.reputation_manager is not None:
+                other_peers = self.reputation_manager.get_active_peers(other_peers_all)
+                if len(other_peers) < len(other_peers_all):
+                    n_blocked = len(other_peers_all) - len(other_peers)
+                    print(f"[{self.node_id.upper()}] (Defesa) {n_blocked} par(es) ISOLATED ignorado(s) na consulta.")
+            else:
+                other_peers = other_peers_all
 
             if not other_peers:
                 print(
                     f"[{self.node_id.upper()}] Ação: Conflito detectado, mas não há outros pares disponíveis. Usando decisão local padrão.")
                 best_model_class = self.engine.counseling_logic(sample_data_array)
                 final_decision = best_model_class
-                return final_decision
-
-            # O cliente seleciona um par aleatório da lista filtrada
-            counsel_response = self.client.request_counsel(
-                sample_data_array,
-                other_peers,
-                ground_truth,
-                initial_chain
-            )
-
-            if counsel_response:
-                counsel_decision = counsel_response.get('decision')
             else:
-                counsel_decision = None  # Falha de conexão inicial
-
-            if counsel_decision == 'LOOP_CLOSED':
-                print(
-                    f"[{self.node_id.upper()}] Ação: LOOP_CLOSED detectado. Usando o classificador local de maior confiança...")
-
-                best_model_class = self.engine.counseling_logic(sample_data_array)
-                final_decision = best_model_class
-
-                print(
-                    f"[{self.node_id.upper()}] WARNING: Decisão final: {final_decision} (Melhor Classificador Local). Classe: {best_model_class}")
-
-            else:
-                final_decision = counsel_decision
-                print(
-                    f"[{self.node_id.upper()}] Ação: Decisão Final: {final_decision}"
-                    f" (Confirmado por {counsel_response['counselor_id'] if counsel_response else 'N/A'})."
+                # O cliente seleciona um par aleatório da lista filtrada
+                counsel_response = self.client.request_counsel(
+                    sample_data_array,
+                    other_peers,
+                    ground_truth,
+                    initial_chain
                 )
 
-            # --- Atualização de reputação quando ground_truth é conhecido ---
-            if counsel_response and isinstance(counsel_response, dict):
-                counselor_id = counsel_response.get("counselor_id", "UNKNOWN")
-                counselor_ip = counsel_response.get("counselor_ip", None)
-                counselor_port = counsel_response.get("counselor_port", None)
+                if counsel_response:
+                    counsel_decision = counsel_response.get('decision')
+                else:
+                    counsel_decision = None  # Falha de conexão inicial
 
-                gt_str = str(ground_truth)
-                is_valid_gt = gt_str not in ("N/A", "N/A_from_peer", "UNKNOWN", "")
-
-                if is_valid_gt and counselor_ip and counselor_port:
-                    dec_str = str(counsel_decision) if counsel_decision else ""
-                    self.reputation_manager.register_challenge_result(
-                        peer_ip=counselor_ip,
-                        peer_port=int(counselor_port),
-                        peer_decision=dec_str,
-                        ground_truth=gt_str,
-                        latencia_ms=counsel_response.get("latencia_ms", 0.0),
-                    )
+                if counsel_decision == 'LOOP_CLOSED':
                     print(
-                        f"[{self.node_id.upper()}] (Defesa) Reputação de {counselor_id} atualizada. "
-                        f"decisão={dec_str} | gt={gt_str}"
+                        f"[{self.node_id.upper()}] Ação: LOOP_CLOSED detectado. Usando o classificador local de maior confiança...")
+
+                    best_model_class = self.engine.counseling_logic(sample_data_array)
+                    final_decision = best_model_class
+
+                    print(
+                        f"[{self.node_id.upper()}] WARNING: Decisão final: {final_decision} (Melhor Classificador Local). Classe: {best_model_class}")
+
+                else:
+                    final_decision = counsel_decision
+                    print(
+                        f"[{self.node_id.upper()}] Ação: Decisão Final: {final_decision}"
+                        f" (Confirmado por {counsel_response['counselor_id'] if counsel_response else 'N/A'})."
                     )
-            else:
-                counselor_id = "UNKNOWN"
 
-            if final_decision not in self.INVALID_LABELS:
-                print(f"Aprendendo com nova amostra de {final_decision}: {sample_data_array}")
-                self.learn_with_advice(sample_data_array, final_decision, counselor_id=counselor_id)
+                # --- Atualização de reputação quando ground_truth é conhecido e defesa ativa ---
+                if self.reputation_manager is not None and counsel_response and isinstance(counsel_response, dict):
+                    counselor_id = counsel_response.get("counselor_id", "UNKNOWN")
+                    counselor_ip = counsel_response.get("counselor_ip", None)
+                    counselor_port = counsel_response.get("counselor_port", None)
 
-            return final_decision
+                    gt_str = str(ground_truth)
+                    is_valid_gt = gt_str not in ("N/A", "N/A_from_peer", "UNKNOWN", "")
+                    dec_str = str(counsel_decision) if counsel_decision else ""
+
+                    # Só registra desafio se: ground truth é válido E decisão é uma
+                    # label de CLASSE real (não uma label operacional como LOOP_CLOSED).
+                    if is_valid_gt and counselor_ip and counselor_port and not is_operational_label(dec_str):
+                        evento = self.reputation_manager.register_challenge_result(
+                            peer_ip=counselor_ip,
+                            peer_port=int(counselor_port),
+                            peer_decision=dec_str,
+                            ground_truth=gt_str,
+                            latencia_ms=counsel_response.get("latencia_ms", 0.0),
+                        )
+                        if evento is not None:
+                            print(
+                                f"[{self.node_id.upper()}] (Defesa) Reputação de {counselor_id} atualizada "
+                                f"[{evento['tipo_evento']}]. decisão={dec_str} | gt={gt_str} | "
+                                f"rep={evento['reputacao']:.4f} | estado={evento['estado']}"
+                            )
+                            # Marca probe consumido se for um desafio sobre par isolado
+                            if counselor_ip and counselor_port:
+                                self.reputation_manager.consume_probe_for(counselor_ip, int(counselor_port))
+                    elif is_valid_gt and is_operational_label(dec_str):
+                        print(
+                            f"[{self.node_id.upper()}] (Defesa) Label operacional ignorada na avaliação de "
+                            f"{counselor_id}: '{dec_str}' — reputação não alterada."
+                        )
+                elif counsel_response and isinstance(counsel_response, dict):
+                    counselor_id = counsel_response.get("counselor_id", "UNKNOWN")
+                else:
+                    counselor_id = "UNKNOWN"
+
+                if final_decision not in self.INVALID_LABELS:
+                    print(f"Aprendendo com nova amostra de {final_decision}: {sample_data_array}")
+                    self.learn_with_advice(sample_data_array, final_decision, counselor_id=counselor_id)
 
         else:
             # Se não há conflito, usamos a decisão local
             final_decision = classification
             print(
                 f"[{self.node_id.upper()}] Classificação Local: Sem conflito detectado. Decisão Final: {final_decision}.")
-            return final_decision
+
+        # --- Desafio Proativo por Amostras Recebidas ---
+        # Disparado a cada intervalo aleatório de 5 a 15 amostras recebidas,
+        # garantindo que nós sem conflitos também avaliem seus pares regularmente.
+        if self.reputation_manager is not None:
+            with self._challenge_lock:
+                self._samples_since_last_challenge += 1
+                if self._samples_since_last_challenge >= self._next_challenge_at:
+                    self._samples_since_last_challenge = 0
+                    self._next_challenge_at = random.randint(
+                        self._challenge_min_interval, self._challenge_max_interval
+                    )
+                    print(
+                        f"[{self.node_id.upper()}] 🎯 Limiar de amostras atingido. "
+                        f"Disparando desafio proativo (próximo em {self._next_challenge_at} amostras)..."
+                    )
+                    threading.Thread(
+                        target=self._send_active_challenge,
+                        args=(sample_data_array, ground_truth),
+                        daemon=True,
+                    ).start()
+
+        return final_decision

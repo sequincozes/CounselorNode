@@ -25,8 +25,13 @@ Variáveis de ambiente suportadas:
   $env:FINAL_TEST_DATASET_SOURCE = "data_sbrc2026/no2.csv"
 
 Parâmetros de defesa (desafios + reputação):
+  --no-defense       Inicia o nó com a defesa desativada
   --tau              Limiar de reputação para isolamento (padrão: 0.6)
   --min-challenges   Mínimo de desafios antes de isolar um par (padrão: 10)
+  --probe-every      Intervalo de desafios válidos para agendar probe de comeback (padrão: 5)
+  --comeback-threshold Nº de acertos consecutivos para reabilitar par isolado (padrão: 3)
+  --challenge-min    Mínimo de amostras recebidas antes de emitir desafio proativo (padrão: 5)
+  --challenge-max    Máximo de amostras recebidas antes de emitir desafio proativo (padrão: 15)
 """
 
 import time
@@ -38,8 +43,7 @@ PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from core.node import CounselorNode
-from infrastructure.networking import detect_local_ip
+
 
 
 def parse_args():
@@ -89,6 +93,13 @@ def parse_args():
 
     # --- Mecanismo de defesa ---
     parser.add_argument(
+        "--no-defense",
+        "--disable-defense",
+        action="store_true",
+        dest="disable_defense",
+        help="Inicia o nó com o mecanismo de defesa desativado (sem avaliação de reputação ou isolamento de pares)."
+    )
+    parser.add_argument(
         "--tau",
         type=float,
         default=0.6,
@@ -102,12 +113,41 @@ def parse_args():
         metavar="N",
         help="Nº mínimo de desafios para habilitar o isolamento de um par. Padrão: 10"
     )
+    parser.add_argument(
+        "--probe-every",
+        type=int,
+        default=5,
+        metavar="N",
+        help="A cada N desafios válidos globais, agenda um probe de comeback para cada par ISOLATED. Padrão: 5"
+    )
+    parser.add_argument(
+        "--comeback-threshold",
+        type=int,
+        default=3,
+        metavar="N",
+        help="Nº de acertos consecutivos de probe para reabilitar um par ISOLATED (comeback). Padrão: 3"
+    )
+    parser.add_argument(
+        "--challenge-min",
+        type=int,
+        default=5,
+        metavar="N",
+        help="Nº mínimo de amostras recebidas antes de disparar um desafio proativo. Padrão: 5"
+    )
+    parser.add_argument(
+        "--challenge-max",
+        type=int,
+        default=15,
+        metavar="N",
+        help="Nº máximo de amostras recebidas antes de disparar um desafio proativo. Padrão: 15"
+    )
 
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    from infrastructure.networking import detect_local_ip
 
     # Se informado via CLI, sobrepõe variáveis de ambiente
     if args.train_dataset:
@@ -122,7 +162,12 @@ def main():
         print(f"[run_node] Dataset Treino (ENV/CLI): {os.environ.get('TRAIN_EVAL_DATASET_SOURCE')}")
     if os.environ.get("FINAL_TEST_DATASET_SOURCE"):
         print(f"[run_node] Dataset Teste (ENV/CLI):  {os.environ.get('FINAL_TEST_DATASET_SOURCE')}")
-    print(f"[run_node] Defesa — τ={args.tau} | min_challenges={args.min_challenges}")
+    defense_enabled = not args.disable_defense
+    if defense_enabled:
+        print(f"[run_node] Defesa — ATIVA (τ={args.tau} | min_challenges={args.min_challenges} | probe_every={args.probe_every} | comeback_threshold={args.comeback_threshold})")
+        print(f"[run_node] Desafios proativos — intervalo aleatório: [{args.challenge_min}, {args.challenge_max}] amostras")
+    else:
+        print("[run_node] Defesa — DESATIVADA (--no-defense)")
 
     if args.poison_rate > 0:
         print(f"[run_node] ⚠ NÓ MALICIOSO: poison_rate={args.poison_rate*100:.0f}% | delay={args.delay}s")
@@ -130,13 +175,20 @@ def main():
         print("[run_node] Nó honesto (sem envenenamento)")
 
     try:
+        from core.node import CounselorNode
+
         node = CounselorNode(
             detected_ip=local_ip,
             local_port=args.port,
             poison_rate=args.poison_rate,
             delay=args.delay,
+            defense_enabled=defense_enabled,
             defense_tau=args.tau,
             defense_min_challenges=args.min_challenges,
+            defense_probe_every=args.probe_every,
+            defense_comeback_threshold=args.comeback_threshold,
+            challenge_min=args.challenge_min,
+            challenge_max=args.challenge_max,
         )
 
         node.start()
@@ -145,7 +197,12 @@ def main():
         print(f"  NÓ {node.node_id.upper()} ONLINE")
         print(f"  Porta de conselhos : {args.port}")
         print(f"  Porta de amostras  : {node.sample_port}")
-        print(f"  Reputação — τ={args.tau} | min_challenges={args.min_challenges}")
+        if node.defense_enabled:
+            print(f"  Reputação — τ={args.tau} | min_challenges={args.min_challenges}")
+            print(f"  Comeback  — probe_every={args.probe_every} | threshold={args.comeback_threshold}")
+            print(f"  Desafios  — proativos a cada [{args.challenge_min}, {args.challenge_max}] amostras recebidas")
+        else:
+            print("  Defesa    — DESATIVADA (conselhos aceitos sem filtro de reputação)")
         print(f"{'='*60}")
         print("  Aguardando amostras via SampleReceiver...")
         print("  (Ctrl+C para encerrar)\n")
@@ -153,28 +210,36 @@ def main():
         # Mantém o processo vivo; o trabalho real acontece nas threads de servidor
         while True:
             time.sleep(60)
-            # Exibe snapshot periódico do estado de reputação
-            estados = node.reputation_manager.get_all_states()
-            if estados:
-                print(f"\n[{node.node_id.upper()}] --- Snapshot de Reputação ---")
-                for peer_key, info in estados.items():
-                    flag = "⚠ ISOLATED" if info['estado'] == 'ISOLATED' else info['estado']
-                    print(f"  {info['name']:8s} ({peer_key}) | "
-                          f"rep={info['rep']:.4f} | s={info['s']} f={info['f']} | {flag}")
-                print()
+            if node.reputation_manager:
+                # Exibe snapshot periódico do estado de reputação
+                estados = node.reputation_manager.get_all_states()
+                if estados:
+                    print(f"\n[{node.node_id.upper()}] --- Snapshot de Reputação ---")
+                    for peer_key, info in estados.items():
+                        if info['estado'] == 'ISOLATED':
+                            flag = f"⚠ ISOLATED (comeback {info['comeback_hits']}/{args.comeback_threshold}, probes={info['probes_pending']})"
+                        else:
+                            flag = info['estado']
+                        print(f"  {info['name']:8s} ({peer_key}) | "
+                              f"rep={info['rep']:.4f} | s={info['s']} f={info['f']} | {flag}")
+                    print()
 
     except KeyboardInterrupt:
         print(f"\n[{node.node_id.upper()}] Encerrando nó...")
 
-        # Exibe estado final de reputação
-        print(f"\n--- Estado Final de Reputação ({node.node_id.upper()}) ---")
-        for peer_key, info in node.reputation_manager.get_all_states().items():
-            flag = "⚠ ISOLATED" if info['estado'] == 'ISOLATED' else info['estado']
-            print(f"  {info['name']:8s} | rep={info['rep']:.4f} | "
-                  f"s={info['s']} f={info['f']} | n={info['n_chall']} | {flag}")
+        if node.reputation_manager:
+            # Exibe estado final de reputação
+            print(f"\n--- Estado Final de Reputação ({node.node_id.upper()}) ---")
+            for peer_key, info in node.reputation_manager.get_all_states().items():
+                if info['estado'] == 'ISOLATED':
+                    flag = f"⚠ ISOLATED (comeback={info['comeback_hits']}/{args.comeback_threshold})"
+                else:
+                    flag = info['estado']
+                print(f"  {info['name']:8s} | rep={info['rep']:.4f} | "
+                      f"s={info['s']} f={info['f']} | n={info['n_chall']} | {flag}")
 
-        # Snapshot final de métricas
-        node.reputation_manager.snapshot_metricas_defesa()
+            # Snapshot final de métricas
+            node.reputation_manager.snapshot_metricas_defesa()
         print("Logs salvos. Até logo.")
 
     except Exception as e:

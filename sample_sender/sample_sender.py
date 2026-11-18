@@ -3,6 +3,7 @@ import os
 import socket
 import csv
 import argparse
+import time
 from datetime import datetime
 
 import pandas as pd
@@ -90,6 +91,12 @@ class SampleSender:
             raise ValueError(f"Modo de disparo '{mode}' não implementado ainda.")
         self.dispatch_strategy = DISPATCH_STRATEGIES[mode](self.targets)
 
+        # Timeout do socket (aumentado para permitir tempo de consulta P2P/retreino do nó)
+        self.socket_timeout = config.get("socket_timeout_seconds", 60.0)
+
+        # Intervalo padrão para o modo automático
+        self.auto_interval = config.get("auto_interval_seconds", 30.0)
+
         self.report_path = config.get("report_output", "logs/sample_sender_report.csv")
         report_dir = os.path.dirname(self.report_path)
         if report_dir:
@@ -116,7 +123,7 @@ class SampleSender:
 
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(5)
+                s.settimeout(self.socket_timeout)
                 s.connect((target.ip, target.port))
                 s.sendall((json.dumps(message) + "\n").encode("utf-8"))
 
@@ -141,14 +148,16 @@ class SampleSender:
         self.report_file.flush()
 
     def fire_next(self):
-        """Puxa a PRÓXIMA linha do dataset único e entrega ao nó da vez (round-robin)."""
+        """Puxa a PRÓXIMA linha do dataset único e entrega ao nó da vez (round-robin).
+        Retorna True se enviou amostra, False se o dataset terminou."""
         if not self.dataset.has_next():
             print("[Dataset] Fim do fluxo — nenhuma amostra restante para enviar.")
-            return
+            return False
 
         target = self.dispatch_strategy.select_target()
         sample_id, features, ground_truth = self.dataset.next_sample()
         self._deliver(target, sample_id, features, ground_truth)
+        return True
 
     def run_manual_mode(self):
         print("\n=== Sample Sender — Modo Manual (disparo alternado) ===")
@@ -158,26 +167,82 @@ class SampleSender:
             cmd = input("> ")
             if cmd.strip().lower() == "q":
                 break
+            if not self.dataset.has_next():
+                print("[Dataset] Todas as amostras já foram enviadas.")
+                break
             self.fire_next()
+
+    def run_auto_mode(self, interval_seconds=None):
+        interval = interval_seconds if interval_seconds is not None else self.auto_interval
+        print(f"\n=== Sample Sender — Modo Automático (disparo alternado a cada {interval}s) ===")
+        print("Pressione Ctrl+C para pausar/encerrar o envio automático.\n")
+
+        sent_count = 0
+        try:
+            while self.dataset.has_next():
+                sent_count += 1
+                sent = self.fire_next()
+                if not sent:
+                    break
+
+                if self.dataset.has_next():
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Próximo disparo em {interval}s...")
+                    time.sleep(interval)
+
+            if not self.dataset.has_next():
+                print(f"\n[Modo Automático Finalizado] Todas as amostras foram enviadas! Total: {sent_count}")
+
+        except KeyboardInterrupt:
+            print(f"\n[Modo Automático Interrompido pelo usuário] Total de amostras enviadas nesta sessão: {sent_count}")
 
     def close(self):
         self.report_file.close()
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Sample Sender — dispara amostras de um fluxo único, alternando entre nós")
-    parser.add_argument("--mode", type=str, default="manual", choices=["manual"],
-                         help="Modo de operação. Por enquanto só 'manual' está implementado.")
+    parser = argparse.ArgumentParser(
+        description="Sample Sender — dispara amostras de um fluxo único, alternando entre nós"
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="manual",
+        choices=["manual", "auto"],
+        help="Modo de operação: 'manual' (pressione ENTER a cada envio) ou 'auto' (disparo periódico contínuo). Padrão: manual."
+    )
+    parser.add_argument(
+        "--interval",
+        type=float,
+        default=None,
+        metavar="SEGUNDOS",
+        help="Intervalo em segundos entre disparos no modo automático (sobrescreve config). Padrão: 30."
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        metavar="SEGUNDOS",
+        help="Tempo limite (s) de espera pela resposta do nó (sobrescreve config). Padrão: 60."
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
     config = load_config()
+
+    if args.interval is not None:
+        config["auto_interval_seconds"] = args.interval
+    if args.timeout is not None:
+        config["socket_timeout_seconds"] = args.timeout
+
     sender = SampleSender(config)
     try:
         if args.mode == "manual":
             sender.run_manual_mode()
+        elif args.mode == "auto":
+            interval = config.get("auto_interval_seconds", 30.0)
+            sender.run_auto_mode(interval_seconds=interval)
     finally:
         sender.close()
 

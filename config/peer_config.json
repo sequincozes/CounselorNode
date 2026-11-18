@@ -5,7 +5,7 @@
   "counselor_peers": [
     {
       "name": "no_1",
-      "ip": "192.168.1.101",
+      "ip": "127.0.0.1",
       "port": 5000,
       "sample_port": 6000,
       "train_eval_dataset_source": "data_sbrc2026/treino_no1.csv",
@@ -13,7 +13,7 @@
     },
     {
       "name": "no_2",
-      "ip": "192.168.1.101",
+      "ip": "127.0.0.1",
       "port": 5001,
       "sample_port": 6001,
       "train_eval_dataset_source": "data_sbrc2026/no2.csv",
@@ -21,7 +21,7 @@
     },
     {
       "name": "no_3",
-      "ip": "192.168.1.101",
+      "ip": "127.0.0.1",
       "port": 5002,
       "sample_port": 6002,
       "train_eval_dataset_source": "data_sbrc2026/no3.csv",
@@ -47,6 +47,13 @@
     "min_cluster_train_samples": 50,
     "min_cluster_eval_samples": 20,
     "min_samples_per_class_eval": 2,
-    "n_features": 25
+    "n_features": 25,
+    "defense_enabled": true,
+    "defense_tau": 0.7,
+    "defense_min_challenges": 10,
+    "defense_probe_every": 5,
+    "defense_comeback_threshold": 3,
+    "challenge_min_interval": 5,
+    "challenge_max_interval": 15
   }
 }

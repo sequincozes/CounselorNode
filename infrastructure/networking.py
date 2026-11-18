@@ -3,11 +3,30 @@ import socket
 import threading
 import numpy as np
 import time
-import os
 import sys
+import os
 
 # Aumentado para suportar vetores de features (25+ floats) em JSON
 BUFFER_SIZE = 65536
+
+# Importação tardia para evitar ciclo (core -> infrastructure -> core)
+def _get_is_operational_label():
+    try:
+        from core.reputation_manager import is_operational_label
+        return is_operational_label
+    except ImportError:
+        # Fallback inline caso o módulo não esteja disponível
+        _OPERATIONAL = frozenset({
+            "loop_closed", "error_connection", "error_timeout",
+            "error_connection_refused", "error_classification",
+            "error_response", "error", "n/a", "unknown", "none", "",
+        })
+        def _fallback(label):
+            if label is None:
+                return True
+            n = str(label).strip().lower()
+            return n in _OPERATIONAL or n.startswith("error")
+        return _fallback
 
 
 def detect_local_ip():
@@ -192,8 +211,11 @@ class CounselorServer:
 class CounselorClient:
     """
     Implementa a funcionalidade de cliente para pedir conselho a outros pares.
-    Integrado ao ReputationManager: filtra pares ISOLATED e usa o gt recebido
-    para atualizar reputação quando disponível.
+    Integrado ao ReputationManager: filtra pares ISOLATED (exceto probes agendados)
+    e usa o gt recebido para atualizar reputação quando disponível.
+
+    Pares ISOLATED com probe pendente são incluídos como candidatos para que
+    o mecanismo de comeback possa avaliá-los continuamente.
     """
 
     def __init__(self, node_id, peer_manager, logger, reputation_manager=None):
@@ -207,16 +229,23 @@ class CounselorClient:
         self.local_ip = local_info.get('ip', '127.0.0.1')
         self.local_port = local_info.get('port')
 
+        # Carrega a função de verificação de labels operacionais
+        self._is_operational_label = _get_is_operational_label()
+
     def request_counsel(self, sample_data_array, all_peers_list, ground_truth, requester_chain=None,
                         max_retries=5, retry_delay=3):
         """
-        Filtra a lista para remover a si mesmo (IP + Porta), pares ISOLATED
-        (via ReputationManager) e tenta contatar um conselheiro.
-        Se o par sorteado ainda não estiver escutando (nó em boot),
-        tenta novamente com outro par, respeitando um limite de tentativas.
+        Filtra a lista para remover a si mesmo (IP + Porta) e pares ISOLATED
+        sem probe pendente (via ReputationManager), e tenta contatar um conselheiro.
+
+        Pares ISOLATED com probe agendado são INCLUÍDOS na lista e priorizados —
+        isso implementa o mecanismo de comeback contínuo.
 
         A resposta inclui counselor_ip e counselor_port para que o chamador
         possa atualizar a reputação do conselheiro.
+
+        Labels operacionais (LOOP_CLOSED, ERROR_*, etc.) retornadas pelo
+        conselheiro são ignoradas na atualização de reputação.
         """
         print("\n--- PEDINDO ACONSELHAMENTO P2P ---")
 
@@ -226,13 +255,24 @@ class CounselorClient:
             if not (p['ip'] == self.local_ip and p['port'] == self.local_port)
         ]
 
-        # Filtra pares ISOLATED (se ReputationManager disponível)
+        # Filtra pares ISOLATED, mantendo os com probe pendente (comeback)
+        probes_incluidos = 0
         if self.reputation_manager is not None:
             before = len(other_peers)
             other_peers = self.reputation_manager.get_active_peers(other_peers)
-            removed = before - len(other_peers)
+            after = len(other_peers)
+            removed = before - after
+            # Conta quantos foram incluídos por probe
+            if self.reputation_manager is not None:
+                probes_incluidos = sum(
+                    1 for p in other_peers
+                    if self.reputation_manager.is_isolated(p['ip'], p['port'])
+                )
             if removed > 0:
-                print(f"[CLIENTE | {self.node_id}] (Defesa) {removed} par(es) ISOLATED removido(s) da lista de candidatos.")
+                print(
+                    f"[CLIENTE | {self.node_id}] (Defesa) {removed} par(es) ISOLATED "
+                    f"filtrado(s). {probes_incluidos} incluído(s) por probe de comeback."
+                )
 
         if not other_peers:
             print(f"[{self.node_id}] Alerta: Nenhum outro par disponível (Filtro resultou em lista vazia).")
@@ -252,8 +292,16 @@ class CounselorClient:
         request_message = json.dumps(request_data).encode('utf-8')
 
         import random
-        candidates = other_peers.copy()
-        random.shuffle(candidates)
+        # Pares com probe pendente ficam no início da fila (prioridade)
+        probe_peers   = []
+        normal_peers  = []
+        for p in other_peers:
+            if self.reputation_manager and self.reputation_manager.is_isolated(p['ip'], p['port']):
+                probe_peers.append(p)
+            else:
+                normal_peers.append(p)
+        random.shuffle(normal_peers)
+        candidates = probe_peers + normal_peers
 
         for attempt in range(1, max_retries + 1):
             if not candidates:
@@ -262,8 +310,10 @@ class CounselorClient:
 
             target_peer = candidates.pop(0)
             peer_ip, peer_port, peer_name = target_peer['ip'], target_peer['port'], target_peer['name']
+            is_probe = self.reputation_manager and self.reputation_manager.is_isolated(peer_ip, peer_port)
 
-            print(f"[CLIENTE] Tentativa {attempt}/{max_retries}: conselheiro {peer_name} ({peer_ip}:{peer_port})")
+            probe_tag = " [PROBE/COMEBACK]" if is_probe else ""
+            print(f"[CLIENTE] Tentativa {attempt}/{max_retries}: conselheiro {peer_name} ({peer_ip}:{peer_port}){probe_tag}")
 
             start_time = time.time()
             response, log_decision, client_socket = None, "ERROR_CONNECTION", None
@@ -306,18 +356,31 @@ class CounselorClient:
                 if self.reputation_manager is not None:
                     gt_str = str(ground_truth)
                     is_valid_gt = gt_str not in ("N/A", "N/A_from_peer", "UNKNOWN", "")
-                    is_valid_dec = log_decision not in (
-                        "ERROR_CONNECTION", "ERROR_TIMEOUT", "ERROR_CONNECTION_REFUSED",
-                        "LOOP_CLOSED", "ERROR_CLASSIFICATION", "ERROR_RESPONSE"
-                    ) and not log_decision.startswith("ERROR")
 
-                    if is_valid_gt and is_valid_dec:
-                        self.reputation_manager.register_challenge_result(
+                    if is_valid_gt and not self._is_operational_label(log_decision):
+                        # Decisão válida de classe: registra desafio (probe ou normal)
+                        evento = self.reputation_manager.register_challenge_result(
                             peer_ip=peer_ip,
                             peer_port=int(peer_port),
                             peer_decision=log_decision,
                             ground_truth=gt_str,
                             latencia_ms=processing_time_ms,
+                        )
+                        if evento is not None:
+                            # Consome o probe após avaliação
+                            if is_probe:
+                                self.reputation_manager.consume_probe_for(peer_ip, int(peer_port))
+                            tipo = evento.get("tipo_evento", "CHALLENGE")
+                            print(
+                                f"[CLIENTE | {self.node_id}] (Defesa) [{tipo}] {peer_name}: "
+                                f"decisão={log_decision} | gt={gt_str} | "
+                                f"rep={evento['reputacao']:.4f} | estado={evento['estado']}"
+                            )
+                    elif is_valid_gt and self._is_operational_label(log_decision):
+                        # Label operacional: ignora — não prejudica nenhum nó
+                        print(
+                            f"[CLIENTE | {self.node_id}] (Defesa) Label operacional ignorada "
+                            f"({peer_name}): '{log_decision}' — reputação não alterada."
                         )
 
                 return response

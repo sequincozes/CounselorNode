@@ -46,10 +46,11 @@ REPUTACAO_HEADERS = [
     "limiar_tau",
     "min_desafios",
     "estado",
-    "tipo_evento",
+    "tipo_evento",       # CHALLENGE | PROBE_HIT | PROBE_MISS
     "decisao_par",
     "gabarito",
     "latencia_ms",
+    "comeback_hits",     # acertos consecutivos de probe (0 se não ISOLATED)
 ]
 
 # Mecanismo de defesa: métricas agregadas
@@ -58,6 +59,7 @@ METRICAS_DEFESA_HEADERS = [
     "total_normal_requests",
     "total_challenges",
     "total_isolated_peers",
+    "total_trusted_peers",
     "true_positives",
     "false_positives",
     "true_negatives",
@@ -217,7 +219,8 @@ class CounselorLogger:
         Parâmetros esperados no dict `evento`:
             seq_event, peer_name, peer_ip, peer_port,
             s_ij, f_ij, reputacao, limiar_tau, min_desafios,
-            estado, tipo_evento, decisao_par, gabarito, latencia_ms
+            estado, tipo_evento (CHALLENGE|PROBE_HIT|PROBE_MISS),
+            decisao_par, gabarito, latencia_ms, comeback_hits
         """
         ts = datetime.now().isoformat(timespec="milliseconds")
         row = [
@@ -236,6 +239,7 @@ class CounselorLogger:
             evento.get("decisao_par", ""),
             evento.get("gabarito", ""),
             f"{evento.get('latencia_ms', 0):.2f}",
+            evento.get("comeback_hits", 0),
         ]
         with self.lock:
             try:
@@ -251,14 +255,16 @@ class CounselorLogger:
 
         Parâmetros esperados no dict `metricas`:
             timestamp (str, opcional), total_normal_requests, total_challenges,
-            total_isolated_peers, true_positives, false_positives,
-            true_negatives, false_negatives, precision, recall, false_positive_rate
+            total_isolated_peers, total_trusted_peers, true_positives,
+            false_positives, true_negatives, false_negatives,
+            precision, recall, false_positive_rate
         """
         row = [
             metricas.get("timestamp", self._now()),
             metricas.get("total_normal_requests", 0),
             metricas.get("total_challenges", 0),
             metricas.get("total_isolated_peers", 0),
+            metricas.get("total_trusted_peers", 0),
             metricas.get("true_positives", 0),
             metricas.get("false_positives", 0),
             metricas.get("true_negatives", 0),
