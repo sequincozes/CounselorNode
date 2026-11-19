@@ -63,14 +63,16 @@ class CounselorNode:
 
 
 
-    def __init__(self, detected_ip, local_port=None, poison_rate=1, delay=0,
+    def __init__(self, detected_ip, local_port=None, poison_rate=None, delay=None,
                  defense_enabled=None,
-                 defense_tau=0.6, defense_min_challenges=10,
-                 defense_probe_every=5, defense_comeback_threshold=3,
-                 challenge_min=5, challenge_max=15):
+                 defense_tau=None, defense_min_challenges=None,
+                 defense_probe_every=None, defense_comeback_threshold=None,
+                 challenge_min=None, challenge_max=None,
+                 challenge_on_conflict=None):
         # Componente 1: Configuração (Inicializado com o IP detectado)
         self.peer_manager = ConfigManager(detected_ip, local_port=local_port)
         local_info = self.peer_manager.get_local_info()
+        ml_config = self.peer_manager.get_ml_config()
 
         # 2. Informações lidas do config (Centralizado no peer_manager)
         self.node_id = self.peer_manager.node_id
@@ -83,30 +85,53 @@ class CounselorNode:
         self.logger = CounselorLogger(self.node_id, use_log_folder=True)
         print(f"Logger inicializado para o nó: {self.node_id}")
 
-        # Taxa de envenenamento
-        self.poison_rate = poison_rate
+        # Taxa de envenenamento e delay: CLI -> local_info -> ml_config -> default
+        if poison_rate is not None:
+            self.poison_rate = float(poison_rate)
+        else:
+            self.poison_rate = float(local_info.get("poison_rate", ml_config.get("poison_rate", 0.0)))
 
-        # Tempo de início do envenenamento
-        self.delay = delay
+        if delay is not None:
+            self.delay = int(delay)
+        else:
+            self.delay = int(local_info.get("delay", local_info.get("poison_delay", ml_config.get("poison_delay", 0))))
         self.start_time = time.time()
 
         # 4. Motor ML
-        ml_config = self.peer_manager.get_ml_config()
         self.engine = ClassifierEngine(ml_config)
 
         # 5. Mecanismo de Defesa: Reputação
-        if defense_enabled is None:
-            defense_enabled = ml_config.get("defense_enabled", True)
-        self.defense_enabled = bool(defense_enabled)
+        # Precedência: CLI -> local_info -> ml_config -> default
+        if defense_enabled is not None:
+            self.defense_enabled = bool(defense_enabled)
+        else:
+            self.defense_enabled = bool(local_info.get("defense_enabled", ml_config.get("defense_enabled", True)))
+
+        self.defense_tau = float(
+            defense_tau if defense_tau is not None
+            else local_info.get("defense_tau", ml_config.get("defense_tau", 0.6))
+        )
+        self.defense_min_challenges = int(
+            defense_min_challenges if defense_min_challenges is not None
+            else local_info.get("defense_min_challenges", ml_config.get("defense_min_challenges", 10))
+        )
+        self.defense_probe_every = int(
+            defense_probe_every if defense_probe_every is not None
+            else local_info.get("defense_probe_every", ml_config.get("defense_probe_every", 5))
+        )
+        self.defense_comeback_threshold = int(
+            defense_comeback_threshold if defense_comeback_threshold is not None
+            else local_info.get("defense_comeback_threshold", ml_config.get("defense_comeback_threshold", 3))
+        )
 
         if self.defense_enabled:
             all_peers = self.peer_manager.get_other_peers()
             self.reputation_manager = ReputationManager(
                 peers=all_peers,
-                tau=defense_tau,
-                min_challenges=defense_min_challenges,
-                probe_every=defense_probe_every,
-                comeback_threshold=defense_comeback_threshold,
+                tau=self.defense_tau,
+                min_challenges=self.defense_min_challenges,
+                probe_every=self.defense_probe_every,
+                comeback_threshold=self.defense_comeback_threshold,
                 logger=self.logger,
                 node_id=self.node_id,
             )
@@ -133,7 +158,7 @@ class CounselorNode:
         )
 
         # 8. Receptor de Amostras (novo canal, porta separada)
-        self.sample_port = self.peer_manager.get_local_info().get('sample_port', self.port + 1000)
+        self.sample_port = local_info.get('sample_port', self.port + 1000)
         self.sample_receiver = SampleReceiver(
             self.bind_host,
             self.sample_port,
@@ -143,11 +168,19 @@ class CounselorNode:
         )
 
         # 9. Desafio Proativo — disparado por contagem de amostras recebidas
-        # Intervalo aleatório entre challenge_min e challenge_max amostras
-        ml_config_challenge_min = ml_config.get("challenge_min_interval", challenge_min)
-        ml_config_challenge_max = ml_config.get("challenge_max_interval", challenge_max)
-        self._challenge_min_interval = int(ml_config_challenge_min)
-        self._challenge_max_interval = int(ml_config_challenge_max)
+        # Precedência: CLI -> local_info -> ml_config -> default
+        self._challenge_min_interval = int(
+            challenge_min if challenge_min is not None
+            else local_info.get("challenge_min_interval", ml_config.get("challenge_min_interval", 5))
+        )
+        self._challenge_max_interval = int(
+            challenge_max if challenge_max is not None
+            else local_info.get("challenge_max_interval", ml_config.get("challenge_max_interval", 15))
+        )
+        self.challenge_on_conflict = bool(
+            challenge_on_conflict if challenge_on_conflict is not None
+            else local_info.get("challenge_on_conflict", ml_config.get("challenge_on_conflict", False))
+        )
         self._samples_since_last_challenge: int = 0
         self._next_challenge_at: int = random.randint(
             self._challenge_min_interval, self._challenge_max_interval
@@ -155,9 +188,15 @@ class CounselorNode:
         self._challenge_lock = threading.Lock()
         if self.reputation_manager is not None:
             print(
-                f"[{self.node_id.upper()}] Desafio Proativo — intervalo aleatório: "
-                f"[{self._challenge_min_interval}, {self._challenge_max_interval}] amostras | "
-                f"próximo em {self._next_challenge_at} amostras"
+                f"[{self.node_id.upper()}] Defesa configurada: "
+                f"τ={self.defense_tau} | min_challenges={self.defense_min_challenges} | "
+                f"probe_every={self.defense_probe_every} | comeback_threshold={self.defense_comeback_threshold}"
+            )
+            print(
+                f"[{self.node_id.upper()}] Desafios de Reputação: "
+                f"intervalo=[{self._challenge_min_interval}, {self._challenge_max_interval}] amostras recebidas | "
+                f"próximo em {self._next_challenge_at} amostras | "
+                f"desafios por conflito: {'ATIVO' if self.challenge_on_conflict else 'DESATIVADO (apenas por amostras)'}"
             )
 
         print(f"--- {self.node_id.upper()} INICIADO ---")
@@ -287,13 +326,9 @@ class CounselorNode:
         if not all_peers:
             return
 
-        # Inclui pares ISOLATED com probe pendente; exclui os demais ISOLATED
-        candidates = self.reputation_manager.get_active_peers(all_peers)
-        if not candidates:
-            print(f"[{self.node_id.upper()}] (Desafio Ativo) Nenhum par disponível para desafio.")
-            return
-
-        target = random.choice(candidates)
+        # Sorteia um par aleatório entre TODOS os outros pares conhecidos.
+        # Pares isolados também continuam recebendo desafios para avaliar possível recuperação (comeback).
+        target = random.choice(all_peers)
         local_info = self.peer_manager.get_local_info()
         chain = [f"{local_info.get('ip')}:{local_info.get('port')}"]
 
@@ -412,8 +447,10 @@ class CounselorNode:
                         f" (Confirmado por {counsel_response['counselor_id'] if counsel_response else 'N/A'})."
                     )
 
-                # --- Atualização de reputação quando ground_truth é conhecido e defesa ativa ---
-                if self.reputation_manager is not None and counsel_response and isinstance(counsel_response, dict):
+                # --- Atualização de reputação por conflito (opcional, desativada por padrão) ---
+                # Quando desativada (padrão), o conselho é usado apenas para desempate operacional
+                # e os desafios de reputação ocorrem exclusivamente pelo ciclo de 5 a 15 amostras.
+                if self.challenge_on_conflict and self.reputation_manager is not None and counsel_response and isinstance(counsel_response, dict):
                     counselor_id = counsel_response.get("counselor_id", "UNKNOWN")
                     counselor_ip = counsel_response.get("counselor_ip", None)
                     counselor_port = counsel_response.get("counselor_port", None)

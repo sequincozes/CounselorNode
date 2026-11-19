@@ -79,16 +79,16 @@ def parse_args():
     parser.add_argument(
         "--poison-rate",
         type=float,
-        default=0.0,
+        default=None,
         metavar="RATE",
-        help="Taxa de envenenamento de respostas (0.0 = honesto, 1.0 = sempre mente). Padrão: 0.0"
+        help="Taxa de envenenamento de respostas (0.0 = honesto, 1.0 = sempre mente). Padrão: lido do peer_config.json ou 0.0"
     )
     parser.add_argument(
         "--delay",
         type=int,
-        default=0,
+        default=None,
         metavar="SEGUNDOS",
-        help="Tempo (s) antes do nó começar a envenenar conselhos. Padrão: 0"
+        help="Tempo (s) antes do nó começar a envenenar conselhos. Padrão: lido do peer_config.json ou 0"
     )
 
     # --- Mecanismo de defesa ---
@@ -102,44 +102,50 @@ def parse_args():
     parser.add_argument(
         "--tau",
         type=float,
-        default=0.6,
+        default=None,
         metavar="TAU",
-        help="Limiar de reputação mínima τ [0,1]. Par com rep < τ após min-challenges é isolado. Padrão: 0.6"
+        help="Limiar de reputação mínima τ [0,1]. Par com rep < τ após min-challenges é isolado. Padrão: lido do peer_config.json"
     )
     parser.add_argument(
         "--min-challenges",
         type=int,
-        default=10,
+        default=None,
         metavar="N",
-        help="Nº mínimo de desafios para habilitar o isolamento de um par. Padrão: 10"
+        help="Nº mínimo de desafios para habilitar o isolamento de um par. Padrão: lido do peer_config.json"
     )
     parser.add_argument(
         "--probe-every",
         type=int,
-        default=5,
+        default=None,
         metavar="N",
-        help="A cada N desafios válidos globais, agenda um probe de comeback para cada par ISOLATED. Padrão: 5"
+        help="A cada N desafios válidos globais, agenda um probe de comeback para cada par ISOLATED. Padrão: lido do peer_config.json"
     )
     parser.add_argument(
         "--comeback-threshold",
         type=int,
-        default=3,
+        default=None,
         metavar="N",
-        help="Nº de acertos consecutivos de probe para reabilitar um par ISOLATED (comeback). Padrão: 3"
+        help="Nº de acertos consecutivos de probe para reabilitar um par ISOLATED (comeback). Padrão: lido do peer_config.json"
     )
     parser.add_argument(
         "--challenge-min",
         type=int,
-        default=5,
+        default=None,
         metavar="N",
-        help="Nº mínimo de amostras recebidas antes de disparar um desafio proativo. Padrão: 5"
+        help="Nº mínimo de amostras recebidas antes de disparar um desafio proativo. Padrão: lido do peer_config.json"
     )
     parser.add_argument(
         "--challenge-max",
         type=int,
-        default=15,
+        default=None,
         metavar="N",
-        help="Nº máximo de amostras recebidas antes de disparar um desafio proativo. Padrão: 15"
+        help="Nº máximo de amostras recebidas antes de disparar um desafio proativo. Padrão: lido do peer_config.json"
+    )
+    parser.add_argument(
+        "--challenge-on-conflict",
+        action="store_true",
+        default=None,
+        help="Também registra desafios de reputação a cada conselho recebido por conflito (padrão: lido do peer_config.json)"
     )
 
     return parser.parse_args()
@@ -162,17 +168,6 @@ def main():
         print(f"[run_node] Dataset Treino (ENV/CLI): {os.environ.get('TRAIN_EVAL_DATASET_SOURCE')}")
     if os.environ.get("FINAL_TEST_DATASET_SOURCE"):
         print(f"[run_node] Dataset Teste (ENV/CLI):  {os.environ.get('FINAL_TEST_DATASET_SOURCE')}")
-    defense_enabled = not args.disable_defense
-    if defense_enabled:
-        print(f"[run_node] Defesa — ATIVA (τ={args.tau} | min_challenges={args.min_challenges} | probe_every={args.probe_every} | comeback_threshold={args.comeback_threshold})")
-        print(f"[run_node] Desafios proativos — intervalo aleatório: [{args.challenge_min}, {args.challenge_max}] amostras")
-    else:
-        print("[run_node] Defesa — DESATIVADA (--no-defense)")
-
-    if args.poison_rate > 0:
-        print(f"[run_node] ⚠ NÓ MALICIOSO: poison_rate={args.poison_rate*100:.0f}% | delay={args.delay}s")
-    else:
-        print("[run_node] Nó honesto (sem envenenamento)")
 
     try:
         from core.node import CounselorNode
@@ -182,14 +177,26 @@ def main():
             local_port=args.port,
             poison_rate=args.poison_rate,
             delay=args.delay,
-            defense_enabled=defense_enabled,
+            defense_enabled=False if args.disable_defense else None,
             defense_tau=args.tau,
             defense_min_challenges=args.min_challenges,
             defense_probe_every=args.probe_every,
             defense_comeback_threshold=args.comeback_threshold,
             challenge_min=args.challenge_min,
             challenge_max=args.challenge_max,
+            challenge_on_conflict=True if args.challenge_on_conflict else None,
         )
+
+        if node.defense_enabled:
+            print(f"[run_node] Defesa — ATIVA (τ={node.defense_tau} | min_challenges={node.defense_min_challenges} | probe_every={node.defense_probe_every} | comeback_threshold={node.defense_comeback_threshold})")
+            print(f"[run_node] Desafios proativos — intervalo aleatório: [{node._challenge_min_interval}, {node._challenge_max_interval}] amostras (desafios por conflito: {'ATIVO' if node.challenge_on_conflict else 'DESATIVADO'})")
+        else:
+            print("[run_node] Defesa — DESATIVADA (--no-defense ou via peer_config.json)")
+
+        if node.poison_rate > 0:
+            print(f"[run_node] ⚠ NÓ MALICIOSO: poison_rate={node.poison_rate*100:.0f}% | delay={node.delay}s")
+        else:
+            print("[run_node] Nó honesto (sem envenenamento)")
 
         node.start()
 
@@ -198,9 +205,9 @@ def main():
         print(f"  Porta de conselhos : {args.port}")
         print(f"  Porta de amostras  : {node.sample_port}")
         if node.defense_enabled:
-            print(f"  Reputação — τ={args.tau} | min_challenges={args.min_challenges}")
-            print(f"  Comeback  — probe_every={args.probe_every} | threshold={args.comeback_threshold}")
-            print(f"  Desafios  — proativos a cada [{args.challenge_min}, {args.challenge_max}] amostras recebidas")
+            print(f"  Reputação — τ={node.defense_tau} | min_challenges={node.defense_min_challenges}")
+            print(f"  Comeback  — probe_every={node.defense_probe_every} | threshold={node.defense_comeback_threshold}")
+            print(f"  Desafios  — a cada [{node._challenge_min_interval}, {node._challenge_max_interval}] amostras recebidas (conflitos: {'com desafio' if node.challenge_on_conflict else 'sem desafio'})")
         else:
             print("  Defesa    — DESATIVADA (conselhos aceitos sem filtro de reputação)")
         print(f"{'='*60}")
@@ -217,7 +224,7 @@ def main():
                     print(f"\n[{node.node_id.upper()}] --- Snapshot de Reputação ---")
                     for peer_key, info in estados.items():
                         if info['estado'] == 'ISOLATED':
-                            flag = f"⚠ ISOLATED (comeback {info['comeback_hits']}/{args.comeback_threshold}, probes={info['probes_pending']})"
+                            flag = f"⚠ ISOLATED (comeback {info['comeback_hits']}/{node.defense_comeback_threshold}, probes={info['probes_pending']})"
                         else:
                             flag = info['estado']
                         print(f"  {info['name']:8s} ({peer_key}) | "
@@ -232,7 +239,7 @@ def main():
             print(f"\n--- Estado Final de Reputação ({node.node_id.upper()}) ---")
             for peer_key, info in node.reputation_manager.get_all_states().items():
                 if info['estado'] == 'ISOLATED':
-                    flag = f"⚠ ISOLATED (comeback={info['comeback_hits']}/{args.comeback_threshold})"
+                    flag = f"⚠ ISOLATED (comeback={info['comeback_hits']}/{node.defense_comeback_threshold})"
                 else:
                     flag = info['estado']
                 print(f"  {info['name']:8s} | rep={info['rep']:.4f} | "

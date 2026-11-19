@@ -53,7 +53,8 @@
     "defense_min_challenges": 10,
     "defense_probe_every": 5,
     "defense_comeback_threshold": 3,
-    "challenge_min_interval": 5,
-    "challenge_max_interval": 15
+    "challenge_min_interval": 2,
+    "challenge_max_interval": 8,
+    "challenge_on_conflict": false
   }
 }

@@ -34,6 +34,7 @@ Uso:
 
 import os
 import csv
+import json
 import glob
 import argparse
 from collections import defaultdict
@@ -107,7 +108,7 @@ def load_reputation_series(filepath, x_mode="per-peer"):
         "x": [],
         "y": [],
         "estados": [],
-        "tau": 0.6,
+        "tau": 0.7,
         "last_state": "EVALUATING"
     })
 
@@ -129,9 +130,9 @@ def load_reputation_series(filepath, x_mode="per-peer"):
                 continue
 
             try:
-                tau_val = float(row.get("limiar_tau", 0.6))
+                tau_val = float(row.get("limiar_tau", 0.7))
             except ValueError:
-                tau_val = 0.6
+                tau_val = 0.7
 
             estado = row.get("estado", "EVALUATING").strip()
 
@@ -156,7 +157,7 @@ def load_reputation_series(filepath, x_mode="per-peer"):
 # =============================================================================
 # Renderização via Matplotlib (PNG / PDF / JPG / Janela Interativa)
 # =============================================================================
-def plot_single_node_axis(ax, evaluator_node, peer_series, tau_threshold=0.6, x_mode="per-peer"):
+def plot_single_node_axis(ax, evaluator_node, peer_series, tau_threshold=0.7, x_mode="per-peer"):
     """
     Plota as duas curvas de reputação em um objeto Axes do matplotlib.
     """
@@ -241,7 +242,7 @@ def plot_single_node_axis(ax, evaluator_node, peer_series, tau_threshold=0.6, x_
     ax.legend(loc="lower right", fontsize=9.5, framealpha=0.9, edgecolor="#cccccc")
 
 
-def generate_matplotlib_plots(node_data, output_dir, tau=0.6,
+def generate_matplotlib_plots(node_data, output_dir, tau=0.7,
                               x_mode="per-peer", layout="horizontal",
                               img_format="png", dpi=300, show=False):
     """
@@ -312,7 +313,7 @@ def generate_matplotlib_plots(node_data, output_dir, tau=0.6,
 # =============================================================================
 # Renderizador Vetorial SVG Nativo (Independente, roda em Python puro)
 # =============================================================================
-def generate_standalone_svg(evaluator_node, peer_series, tau_threshold=0.6, width=650, height=400):
+def generate_standalone_svg(evaluator_node, peer_series, tau_threshold=0.7, width=650, height=400):
     """
     Gera um gráfico SVG vetorial puro para um nó avaliador específico,
     com as duas curvas dos nós avaliados, eixos, grade e linha do limiar tau.
@@ -410,7 +411,7 @@ def generate_standalone_svg(evaluator_node, peer_series, tau_threshold=0.6, widt
     return "\n".join(svg_lines)
 
 
-def generate_native_svg_and_html(node_data, output_dir, tau=0.6):
+def generate_native_svg_and_html(node_data, output_dir, tau=0.7):
     """
     Gera arquivos SVG para cada nó e uma página HTML interativa contendo
     os 3 gráficos dispostos horizontalmente em um painel consolidado.
@@ -539,6 +540,16 @@ def generate_native_svg_and_html(node_data, output_dir, tau=0.6):
 # Função Principal (CLI)
 # =============================================================================
 def main():
+    default_tau = 0.7
+    config_file = os.path.join(os.path.dirname(__file__), "config", "peer_config.json")
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            default_tau = float(cfg.get("ml_config", {}).get("defense_tau", 0.7))
+        except Exception:
+            default_tau = 0.7
+
     parser = argparse.ArgumentParser(
         description="Plota 3 gráficos da reputação atribuída entre os nós conforme o número de desafios."
     )
@@ -557,8 +568,8 @@ def main():
     parser.add_argument(
         "--tau",
         type=float,
-        default=0.6,
-        help="Limiar de reputação para corte/isolamento (padrão: 0.60)"
+        default=default_tau,
+        help=f"Limiar de reputação para corte/isolamento (padrão: {default_tau:.2f})"
     )
     parser.add_argument(
         "--x-mode",
